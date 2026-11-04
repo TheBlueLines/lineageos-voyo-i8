@@ -1,0 +1,14 @@
+# Per-device data: partition dumps hold IMEI/MAC calibration, keystores and the eMMC CID
+/stock-backup/
+/device-info/
+
+# Build output and test images (images are published as release assets)
+/out/
+
+# Large stock binaries used for disassembly
+/analysis/Image
+/analysis/Image.strings
+/analysis/fb-gemini.raw
+
+__pycache__/
+*.log

@@ -1,0 +1,20 @@
+From e0e26c0f2d30a17acb96f4b518db758fffa80273 Mon Sep 17 00:00:00 2001
+From: voyo-port <port@localhost>
+Date: Fri, 30 Oct 2026 22:44:30 +0100
+Subject: [PATCH 14/22] uapi: Drop Kbuild entries for missing headers
+
+---
+ kernel-3.18/include/linux/Kbuild | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/kernel-3.18/include/linux/Kbuild b/kernel-3.18/include/linux/Kbuild
+index 0dc5cbb84..a4608897a 100644
+--- a/kernel-3.18/include/linux/Kbuild
++++ b/kernel-3.18/include/linux/Kbuild
+@@ -1,3 +1,2 @@
+ header-y += if_pppolac.h
+ header-y += if_pppopns.h
+-header-y += autoconf.h
+-- 
+2.25.1
+

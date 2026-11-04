@@ -1,0 +1,63 @@
+From 75f99a35d792b33ae5286463fb9975ffa63cbe6f Mon Sep 17 00:00:00 2001
+From: voyo-port <port@localhost>
+Date: Fri, 30 Oct 2026 19:49:46 +0100
+Subject: [PATCH 03/22] Port to the VOYO i8 (x970_t10_97inc)
+
+---
+ kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig  | 2 +-
+ kernel-3.18/drivers/input/touchscreen/mediatek/Kconfig   | 8 +++++++-
+ kernel-3.18/drivers/misc/mediatek/power/mt6797/bq25890.c | 3 +++
+ 3 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig b/kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig
+index 1cf683423..da9ee1193 100644
+--- a/kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig
++++ b/kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig
+@@ -2292,7 +2292,6 @@ CONFIG_MTK_KERNEL_POWER_OFF_CHARGING=y
+ # CONFIG_MTK_HAFG_20 is not set
+ # CONFIG_MTK_EMBEDDED_BATTERY is not set
+ # CONFIG_MTK_PUMP_EXPRESS_SUPPORT is not set
+-# CONFIG_MTK_PUMP_EXPRESS_PLUS_SUPPORT is not set
+ # CONFIG_MTK_PUMP_EXPRESS_PLUS_20_SUPPORT is not set
+ # CONFIG_DC_12V is not set
+ # CONFIG_WIRELESS_CHARGE is not set
+@@ -3841,5 +3840,6 @@ CONFIG_FONT_AUTOSELECT=y
+ CONFIG_ARCH_HAS_SG_CHAIN=y
+ CONFIG_TOUCHSCREEN_MTK_GSL3680=y
+ CONFIG_RD_XZ=y
++CONFIG_MTK_PUMP_EXPRESS_PLUS_SUPPORT=y
+ CONFIG_CUSTOM_KERNEL_IMGSENSOR="imx214_mipi_raw s5k3l8_mipi_raw"
+ # CONFIG_MTK_NFC is not set
+diff --git a/kernel-3.18/drivers/input/touchscreen/mediatek/Kconfig b/kernel-3.18/drivers/input/touchscreen/mediatek/Kconfig
+index 3389adc9c..218330745 100755
+--- a/kernel-3.18/drivers/input/touchscreen/mediatek/Kconfig
++++ b/kernel-3.18/drivers/input/touchscreen/mediatek/Kconfig
+@@ -24,7 +24,13 @@ config TOUCHSCREEN_MTK
+ 
+ source "drivers/input/touchscreen/mediatek/GT1151/Kconfig"
+ 
+-config TOUCHSCREEN_MTK_NT36xxx
++config TOUCHSCREEN_MTK_GSL3680
++	bool "Silead GSL3680 for the VOYO i8"
++	depends on TOUCHSCREEN_MTK
++	help
++	  Silead GSL3680 capacitive touch controller.
++
++config TOUCHSCREEN_MTK_GT1151
+ 	tristate "MediaTek Touch Panel Driver"
+ 	default n
+ 	help
+diff --git a/kernel-3.18/drivers/misc/mediatek/power/mt6797/bq25890.c b/kernel-3.18/drivers/misc/mediatek/power/mt6797/bq25890.c
+index d66a43f88..be74c5488 100755
+--- a/kernel-3.18/drivers/misc/mediatek/power/mt6797/bq25890.c
++++ b/kernel-3.18/drivers/misc/mediatek/power/mt6797/bq25890.c
+@@ -1232,3 +1232,6 @@ module_exit(bq25890_exit);
+ MODULE_LICENSE("GPL");
+ MODULE_DESCRIPTION("I2C bq25890 Driver");
+ MODULE_AUTHOR("will cai <will.cai@mediatek.com>");
++
++/* Read by the xHCI driver; this charger needs no wait. */
++int chargin_hw_init_done_rt = 1;
+-- 
+2.25.1
+

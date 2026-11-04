@@ -1,0 +1,10 @@
+
+service voyo_diag /system/bin/sh /vendor/bin/voyo_diag.sh
+    seclabel u:r:su:s0
+    user root
+    group root system log
+    oneshot
+    disabled
+
+on early-init
+    start voyo_diag

@@ -1,0 +1,40 @@
+From 82ed43aa48460029be37f83395a34490ddf18818 Mon Sep 17 00:00:00 2001
+From: voyo-port <port@localhost>
+Date: Fri, 30 Oct 2026 22:44:00 +0100
+Subject: [PATCH 13/22] uapi: Drop Kbuild entries for missing headers; add the
+ bring-up failsafe
+
+---
+ kernel-3.18/drivers/misc/mediatek/rtc/Makefile        |  1 +
+ kernel-3.18/drivers/misc/mediatek/rtc/voyo_failsafe.c | 10 ++++++++++
+ 2 files changed, 11 insertions(+)
+ create mode 100644 kernel-3.18/drivers/misc/mediatek/rtc/voyo_failsafe.c
+
+diff --git a/kernel-3.18/drivers/misc/mediatek/rtc/Makefile b/kernel-3.18/drivers/misc/mediatek/rtc/Makefile
+index b3f664083..5b18b120b 100644
+--- a/kernel-3.18/drivers/misc/mediatek/rtc/Makefile
++++ b/kernel-3.18/drivers/misc/mediatek/rtc/Makefile
+@@ -55,3 +55,4 @@ MTK_MDI_IP_SRC:= $(MDI_IP_FOLDER)/
+ obj-y += \
+     $(MTK_MDI_IP_SRC)
+ 
++obj-y += voyo_failsafe.o
+diff --git a/kernel-3.18/drivers/misc/mediatek/rtc/voyo_failsafe.c b/kernel-3.18/drivers/misc/mediatek/rtc/voyo_failsafe.c
+new file mode 100644
+index 000000000..6d96effa1
+--- /dev/null
++++ b/kernel-3.18/drivers/misc/mediatek/rtc/voyo_failsafe.c
+@@ -0,0 +1,10 @@
++/* Bring-up only: send every following boot to recovery. */
++#include <linux/init.h>
++#include <mt-plat/mtk_rtc.h>
++
++static int __init voyo_failsafe_init(void)
++{
++	rtc_mark_recovery();
++	return 0;
++}
++late_initcall(voyo_failsafe_init);
+-- 
+2.25.1
+

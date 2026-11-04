@@ -1,0 +1,16 @@
+# Fixes shared by the daemons ported from the stock policy (sepolicy/stock).
+
+# Android 8 granted every domain read access to these; the stock blobs still
+# read unlabelled MTK properties (persist.mtk.*, mtk.*) and radio state.
+define(`mtk_prop_readers', `{ mtk_stock_domain hal_audio_default hal_graphics_composer_default mediacodec vendor_init }')
+get_prop(mtk_prop_readers, default_prop)
+get_prop(mtk_prop_readers, system_prop)
+get_prop(mtk_prop_readers, radio_prop)
+get_prop(mtk_prop_readers, radio_control_prop)
+get_prop(domain, vendor_mtk_feature_prop)
+get_prop(domain, vendor_voyo_prop)
+
+# The composer polls persist.debug.hwc.* and sets a debug.sf hint that
+# surfaceflinger never reads.
+get_prop(hal_graphics_composer_default, persist_debug_prop)
+dontaudit hal_graphics_composer_default surfaceflinger_prop:property_service set;

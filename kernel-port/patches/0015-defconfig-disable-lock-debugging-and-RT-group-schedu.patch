@@ -1,0 +1,63 @@
+From b9fa9deb0a8ccebd99780a8b16c3355d271dc0b4 Mon Sep 17 00:00:00 2001
+From: TWRP Builder <builder@localhost>
+Date: Mon, 2 Nov 2026 20:35:45 +0100
+Subject: [PATCH 15/22] defconfig: disable lock debugging and RT group
+ scheduling
+
+---
+ .../arm64/configs/x970_t10_97inc_defconfig    | 20 +++++++++----------
+ 1 file changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig b/kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig
+index 45651500e..89b13ceb2 100644
+--- a/kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig
++++ b/kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig
+@@ -128,7 +128,6 @@ CONFIG_RESOURCE_COUNTERS=y
+ CONFIG_CGROUP_SCHED=y
+ CONFIG_FAIR_GROUP_SCHED=y
+ # CONFIG_CFS_BANDWIDTH is not set
+-CONFIG_RT_GROUP_SCHED=y
+ # CONFIG_BLK_CGROUP is not set
+ # CONFIG_CHECKPOINT_RESTORE is not set
+ # CONFIG_NAMESPACES is not set
+@@ -3505,15 +3504,7 @@ CONFIG_SCHEDSTATS=y
+ # Lock Debugging (spinlocks, mutexes, etc...)
+ #
+ # CONFIG_DEBUG_RT_MUTEXES is not set
+-CONFIG_DEBUG_SPINLOCK=y
+-CONFIG_DEBUG_MUTEXES=y
+ # CONFIG_DEBUG_WW_MUTEX_SLOWPATH is not set
+-CONFIG_DEBUG_LOCK_ALLOC=y
+-CONFIG_PROVE_LOCKING=y
+-CONFIG_LOCKDEP=y
+-CONFIG_LOCK_STAT=y
+-# CONFIG_DEBUG_LOCKDEP is not set
+-# CONFIG_DEBUG_ATOMIC_SLEEP is not set
+ # CONFIG_DEBUG_LOCKING_API_SELFTESTS is not set
+ # CONFIG_LOCK_TORTURE_TEST is not set
+ CONFIG_TRACE_IRQFLAGS=y
+@@ -3530,7 +3521,6 @@ CONFIG_HAVE_DEBUG_BUGVERBOSE=y
+ #
+ # RCU Debugging
+ #
+-# CONFIG_PROVE_RCU is not set
+ # CONFIG_SPARSE_RCU_POINTER is not set
+ # CONFIG_TORTURE_TEST is not set
+ # CONFIG_RCU_TORTURE_TEST is not set
+@@ -3845,3 +3835,13 @@ CONFIG_KEYS=y
+ CONFIG_CRYPTO_CMAC=y
+ CONFIG_CRYPTO_CRC32=y
+ CONFIG_CRYPTO_MD4=y
++# CONFIG_RT_GROUP_SCHED is not set
++# CONFIG_PROVE_LOCKING is not set
++# CONFIG_DEBUG_LOCK_ALLOC is not set
++# CONFIG_LOCK_STAT is not set
++# CONFIG_LOCKDEP is not set
++# CONFIG_DEBUG_LOCKDEP is not set
++# CONFIG_DEBUG_SPINLOCK is not set
++# CONFIG_DEBUG_MUTEXES is not set
++# CONFIG_DEBUG_ATOMIC_SLEEP is not set
++# CONFIG_PROVE_RCU is not set
+-- 
+2.25.1
+

@@ -1,0 +1,72 @@
+# Base seccomp policy for the stock Android 8 OMX service
+# (/vendor/bin/hw/android.hardware.media.omx@1.0-service).
+#
+# The blob reads /system/etc/seccomp_policy/mediacodec.policy, which on
+# Android 13 uses MREMAP_MAYMOVE and @include. Its Android 8 minijail knows
+# neither and aborts the service, so it crash-loops every 5 s. gen_vendor.py
+# points the blob here instead. This is the Android 13 arm policy with the
+# constant spelled out, crash_dump.arm.policy inlined (minus syscalls already
+# allowed here or in the vendor policy). MediaTek additions stay in
+# /vendor/etc/seccomp_policy/mediacodec.policy.
+futex: 1
+ioctl: 1
+write: 1
+prctl: 1
+clock_gettime: 1
+getpriority: 1
+read: 1
+close: 1
+writev: 1
+dup: 1
+ppoll: 1
+mmap2: 1
+getrandom: 1
+memfd_create: 1
+ftruncate: 1
+ftruncate64: 1
+# MREMAP_MAYMOVE | MREMAP_FIXED, or MREMAP_MAYMOVE
+mremap: arg3 == 3 || arg3 == 1
+munmap: 1
+mprotect: 1
+madvise: 1
+openat: 1
+sigaltstack: 1
+clone: 1
+setpriority: 1
+getuid32: 1
+fstat64: 1
+fstatfs64: 1
+pread64: 1
+faccessat: 1
+readlinkat: 1
+exit: 1
+rt_sigprocmask: 1
+set_tid_address: 1
+restart_syscall: 1
+exit_group: 1
+rt_sigreturn: 1
+pipe2: 1
+gettimeofday: 1
+sched_yield: 1
+nanosleep: 1
+lseek: 1
+_llseek: 1
+sched_get_priority_max: 1
+sched_get_priority_min: 1
+statfs64: 1
+sched_setscheduler: 1
+fstatat64: 1
+ugetrlimit: 1
+getdents64: 1
+
+# From crash_dump.arm.policy
+sigreturn: 1
+recvmsg: 1
+process_vm_readv: 1
+tgkill: 1
+rt_sigaction: 1
+rt_tgsigqueueinfo: 1
+geteuid32: 1
+getgid32: 1
+getegid32: 1
+getgroups32: 1

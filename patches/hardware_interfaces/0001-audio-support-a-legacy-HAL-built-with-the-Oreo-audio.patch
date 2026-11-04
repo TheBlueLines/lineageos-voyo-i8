@@ -1,0 +1,310 @@
+From ae8c3b8935a85490acde915bfe642d154f3a7494 Mon Sep 17 00:00:00 2001
+From: TWRP Builder <builder@localhost>
+Date: Tue, 3 Nov 2026 08:45:00 +0100
+Subject: [PATCH] audio: support a legacy HAL built with the Oreo audio.h
+
+Change-Id: I7392930260341624ba4313c83d13ce08c69368d2
+---
+ audio/core/all-versions/default/Device.cpp    |  6 ++--
+ .../all-versions/default/PrimaryDevice.cpp    |  8 +++--
+ audio/core/all-versions/default/StreamIn.cpp  | 18 +++++------
+ audio/core/all-versions/default/StreamOut.cpp | 32 +++++++++----------
+ .../default/include/core/default/Device.h     |  6 +++-
+ 5 files changed, 38 insertions(+), 32 deletions(-)
+
+diff --git a/audio/core/all-versions/default/Device.cpp b/audio/core/all-versions/default/Device.cpp
+index cbcdf22..7801615 100644
+--- a/audio/core/all-versions/default/Device.cpp
++++ b/audio/core/all-versions/default/Device.cpp
+@@ -47,8 +47,8 @@ namespace util {
+ using namespace ::android::hardware::audio::CORE_TYPES_CPP_VERSION::implementation::util;
+ }
+ 
+-Device::Device(audio_hw_device_t* device, bool hasNougatAbi)
+-    : mIsClosed(false), mDevice(device), mHasNougatAbi(hasNougatAbi) {}
++Device::Device(audio_hw_device_t* device, bool hasNougatAbi, bool hasOreoAbi)
++    : mIsClosed(false), mDevice(device), mHasNougatAbi(hasNougatAbi), mHasOreoAbi(hasOreoAbi) {}
+ 
+ Device::~Device() {
+     (void)doClose();
+@@ -551,7 +551,7 @@ Return<void> Device::getMicrophones(getMicrophones_cb _hidl_cb) {
+ 
+     hidl_vec<MicrophoneInfo> microphones;
+     // In a Nougat HAL this field is dump(), see hasNougatAbi().
+-    if (!mHasNougatAbi && mDevice->get_microphones != NULL &&
++    if (!hasLegacyStreamAbi() && mDevice->get_microphones != NULL &&
+         mDevice->get_microphones(mDevice, &mic_array[0], &actual_mics) == 0) {
+         microphones.resize(actual_mics);
+         for (size_t i = 0; i < actual_mics; ++i) {
+diff --git a/audio/core/all-versions/default/PrimaryDevice.cpp b/audio/core/all-versions/default/PrimaryDevice.cpp
+index a807c54..5dc97c9 100644
+--- a/audio/core/all-versions/default/PrimaryDevice.cpp
++++ b/audio/core/all-versions/default/PrimaryDevice.cpp
+@@ -35,10 +35,12 @@ namespace util {
+ using namespace ::android::hardware::audio::CORE_TYPES_CPP_VERSION::implementation::util;
+ }
+ 
+-// ro.vendor.audio.legacy_nougat_abi marks the primary legacy HAL as a Nougat build, see
+-// Device::hasNougatAbi(). The other modules loaded by this service are not affected.
++// ro.vendor.audio.legacy_nougat_abi and ro.vendor.audio.legacy_oreo_abi mark the primary
++// legacy HAL as a Nougat or Oreo build, see Device::hasNougatAbi() and
++// Device::hasLegacyStreamAbi(). The other modules loaded by this service are not affected.
+ PrimaryDevice::PrimaryDevice(audio_hw_device_t* device)
+-    : mDevice(new Device(device, property_get_bool("ro.vendor.audio.legacy_nougat_abi", false))) {
++    : mDevice(new Device(device, property_get_bool("ro.vendor.audio.legacy_nougat_abi", false),
++                         property_get_bool("ro.vendor.audio.legacy_oreo_abi", false))) {
+     ALOGI_IF(mDevice->hasNougatAbi(),
+              "Primary HAL has the Nougat audio.h layout, post-Nougat methods are not supported");
+ }
+diff --git a/audio/core/all-versions/default/StreamIn.cpp b/audio/core/all-versions/default/StreamIn.cpp
+index 09c9760..0ada725 100644
+--- a/audio/core/all-versions/default/StreamIn.cpp
++++ b/audio/core/all-versions/default/StreamIn.cpp
+@@ -334,17 +334,17 @@ Return<Result> StreamIn::setParameters(const hidl_vec<ParameterValue>& context,
+ // A Nougat audio_stream_in ends at get_capture_position(): for such a HAL
+ // (Device::hasNougatAbi()) the MMAP fields and all fields added after them are not read.
+ Return<Result> StreamIn::start() {
+-    if (mDevice->hasNougatAbi()) return Result::NOT_SUPPORTED;
++    if (mDevice->hasLegacyStreamAbi()) return Result::NOT_SUPPORTED;
+     return mStreamMmap->start();
+ }
+ 
+ Return<Result> StreamIn::stop() {
+-    if (mDevice->hasNougatAbi()) return Result::NOT_SUPPORTED;
++    if (mDevice->hasLegacyStreamAbi()) return Result::NOT_SUPPORTED;
+     return mStreamMmap->stop();
+ }
+ 
+ Return<void> StreamIn::createMmapBuffer(int32_t minSizeFrames, createMmapBuffer_cb _hidl_cb) {
+-    if (mDevice->hasNougatAbi()) {
++    if (mDevice->hasLegacyStreamAbi()) {
+         _hidl_cb(Result::NOT_SUPPORTED, MmapBufferInfo());
+         return Void();
+     }
+@@ -353,7 +353,7 @@ Return<void> StreamIn::createMmapBuffer(int32_t minSizeFrames, createMmapBuffer_
+ }
+ 
+ Return<void> StreamIn::getMmapPosition(getMmapPosition_cb _hidl_cb) {
+-    if (mDevice->hasNougatAbi()) {
++    if (mDevice->hasLegacyStreamAbi()) {
+         _hidl_cb(Result::NOT_SUPPORTED, MmapPosition());
+         return Void();
+     }
+@@ -567,7 +567,7 @@ Result StreamIn::doUpdateSinkMetadataV7(const SinkMetadata& sinkMetadata) {
+ 
+ #if MAJOR_VERSION <= 6
+ Return<void> StreamIn::updateSinkMetadata(const SinkMetadata& sinkMetadata) {
+-    if (mDevice->hasNougatAbi() || mStream->update_sink_metadata == nullptr) {
++    if (mDevice->hasLegacyStreamAbi() || mStream->update_sink_metadata == nullptr) {
+         return Void();  // not supported by the HAL
+     }
+     (void)doUpdateSinkMetadata(sinkMetadata);
+@@ -576,7 +576,7 @@ Return<void> StreamIn::updateSinkMetadata(const SinkMetadata& sinkMetadata) {
+ #elif MAJOR_VERSION >= 7
+ Return<Result> StreamIn::updateSinkMetadata(const SinkMetadata& sinkMetadata) {
+     if (mDevice->version() < AUDIO_DEVICE_API_VERSION_3_2) {
+-        if (mDevice->hasNougatAbi() || mStream->update_sink_metadata == nullptr) {
++        if (mDevice->hasLegacyStreamAbi() || mStream->update_sink_metadata == nullptr) {
+             return Result::NOT_SUPPORTED;
+         }
+         return doUpdateSinkMetadata(sinkMetadata);
+@@ -595,7 +595,7 @@ Return<void> StreamIn::getActiveMicrophones(getActiveMicrophones_cb _hidl_cb) {
+     audio_microphone_characteristic_t mic_array[AUDIO_MICROPHONE_MAX_COUNT];
+ 
+     hidl_vec<MicrophoneInfo> microphones;
+-    if (!mDevice->hasNougatAbi() && mStream->get_active_microphones != NULL &&
++    if (!mDevice->hasLegacyStreamAbi() && mStream->get_active_microphones != NULL &&
+         mStream->get_active_microphones(mStream, &mic_array[0], &actual_mics) == 0) {
+         microphones.resize(actual_mics);
+         for (size_t i = 0; i < actual_mics; ++i) {
+@@ -611,7 +611,7 @@ Return<void> StreamIn::getActiveMicrophones(getActiveMicrophones_cb _hidl_cb) {
+ 
+ #if MAJOR_VERSION >= 5
+ Return<Result> StreamIn::setMicrophoneDirection(MicrophoneDirection direction) {
+-    if (mDevice->hasNougatAbi() || mStream->set_microphone_direction == nullptr) {
++    if (mDevice->hasLegacyStreamAbi() || mStream->set_microphone_direction == nullptr) {
+         return Result::NOT_SUPPORTED;
+     }
+     if (!common::utils::isValidHidlEnum(direction)) {
+@@ -625,7 +625,7 @@ Return<Result> StreamIn::setMicrophoneDirection(MicrophoneDirection direction) {
+ }
+ 
+ Return<Result> StreamIn::setMicrophoneFieldDimension(float zoom) {
+-    if (mDevice->hasNougatAbi() || mStream->set_microphone_field_dimension == nullptr) {
++    if (mDevice->hasLegacyStreamAbi() || mStream->set_microphone_field_dimension == nullptr) {
+         return Result::NOT_SUPPORTED;
+     }
+     if (std::isnan(zoom) || zoom < -1 || zoom > 1) {
+diff --git a/audio/core/all-versions/default/StreamOut.cpp b/audio/core/all-versions/default/StreamOut.cpp
+index a9fa49c..c190cc3 100644
+--- a/audio/core/all-versions/default/StreamOut.cpp
++++ b/audio/core/all-versions/default/StreamOut.cpp
+@@ -572,17 +572,17 @@ Return<void> StreamOut::getPresentationPosition(getPresentationPosition_cb _hidl
+ // A Nougat audio_stream_out ends at get_presentation_position(): for such a HAL
+ // (Device::hasNougatAbi()) the MMAP fields and all fields added after them are not read.
+ Return<Result> StreamOut::start() {
+-    if (mDevice->hasNougatAbi()) return Result::NOT_SUPPORTED;
++    if (mDevice->hasLegacyStreamAbi()) return Result::NOT_SUPPORTED;
+     return mStreamMmap->start();
+ }
+ 
+ Return<Result> StreamOut::stop() {
+-    if (mDevice->hasNougatAbi()) return Result::NOT_SUPPORTED;
++    if (mDevice->hasLegacyStreamAbi()) return Result::NOT_SUPPORTED;
+     return mStreamMmap->stop();
+ }
+ 
+ Return<void> StreamOut::createMmapBuffer(int32_t minSizeFrames, createMmapBuffer_cb _hidl_cb) {
+-    if (mDevice->hasNougatAbi()) {
++    if (mDevice->hasLegacyStreamAbi()) {
+         _hidl_cb(Result::NOT_SUPPORTED, MmapBufferInfo());
+         return Void();
+     }
+@@ -591,7 +591,7 @@ Return<void> StreamOut::createMmapBuffer(int32_t minSizeFrames, createMmapBuffer
+ }
+ 
+ Return<void> StreamOut::getMmapPosition(getMmapPosition_cb _hidl_cb) {
+-    if (mDevice->hasNougatAbi()) {
++    if (mDevice->hasLegacyStreamAbi()) {
+         _hidl_cb(Result::NOT_SUPPORTED, MmapPosition());
+         return Void();
+     }
+@@ -650,7 +650,7 @@ Result StreamOut::doUpdateSourceMetadataV7(const SourceMetadata& sourceMetadata)
+ 
+ #if MAJOR_VERSION <= 6
+ Return<void> StreamOut::updateSourceMetadata(const SourceMetadata& sourceMetadata) {
+-    if (mDevice->hasNougatAbi() || mStream->update_source_metadata == nullptr) {
++    if (mDevice->hasLegacyStreamAbi() || mStream->update_source_metadata == nullptr) {
+         return Void();  // not supported by the HAL
+     }
+     (void)doUpdateSourceMetadata(sourceMetadata);
+@@ -659,7 +659,7 @@ Return<void> StreamOut::updateSourceMetadata(const SourceMetadata& sourceMetadat
+ #elif MAJOR_VERSION >= 7
+ Return<Result> StreamOut::updateSourceMetadata(const SourceMetadata& sourceMetadata) {
+     if (mDevice->version() < AUDIO_DEVICE_API_VERSION_3_2) {
+-        if (mDevice->hasNougatAbi() || mStream->update_source_metadata == nullptr) {
++        if (mDevice->hasLegacyStreamAbi() || mStream->update_source_metadata == nullptr) {
+             return Result::NOT_SUPPORTED;
+         }
+         return doUpdateSourceMetadata(sourceMetadata);
+@@ -680,7 +680,7 @@ Return<Result> StreamOut::selectPresentation(int32_t /*presentationId*/, int32_t
+ #if MAJOR_VERSION >= 6
+ Return<void> StreamOut::getDualMonoMode(getDualMonoMode_cb _hidl_cb) {
+     audio_dual_mono_mode_t mode = AUDIO_DUAL_MONO_MODE_OFF;
+-    Result retval = !mDevice->hasNougatAbi() && mStream->get_dual_mono_mode != nullptr
++    Result retval = !mDevice->hasLegacyStreamAbi() && mStream->get_dual_mono_mode != nullptr
+                             ? Stream::analyzeStatus("get_dual_mono_mode",
+                                                     mStream->get_dual_mono_mode(mStream, &mode))
+                             : Result::NOT_SUPPORTED;
+@@ -689,7 +689,7 @@ Return<void> StreamOut::getDualMonoMode(getDualMonoMode_cb _hidl_cb) {
+ }
+ 
+ Return<Result> StreamOut::setDualMonoMode(DualMonoMode mode) {
+-    return !mDevice->hasNougatAbi() && mStream->set_dual_mono_mode != nullptr
++    return !mDevice->hasLegacyStreamAbi() && mStream->set_dual_mono_mode != nullptr
+                    ? Stream::analyzeStatus(
+                              "set_dual_mono_mode",
+                              mStream->set_dual_mono_mode(mStream,
+@@ -699,7 +699,7 @@ Return<Result> StreamOut::setDualMonoMode(DualMonoMode mode) {
+ 
+ Return<void> StreamOut::getAudioDescriptionMixLevel(getAudioDescriptionMixLevel_cb _hidl_cb) {
+     float leveldB = -std::numeric_limits<float>::infinity();
+-    Result retval = !mDevice->hasNougatAbi() && mStream->get_audio_description_mix_level != nullptr
++    Result retval = !mDevice->hasLegacyStreamAbi() && mStream->get_audio_description_mix_level != nullptr
+                             ? Stream::analyzeStatus(
+                                       "get_audio_description_mix_level",
+                                       mStream->get_audio_description_mix_level(mStream, &leveldB))
+@@ -709,7 +709,7 @@ Return<void> StreamOut::getAudioDescriptionMixLevel(getAudioDescriptionMixLevel_
+ }
+ 
+ Return<Result> StreamOut::setAudioDescriptionMixLevel(float leveldB) {
+-    return !mDevice->hasNougatAbi() && mStream->set_audio_description_mix_level != nullptr
++    return !mDevice->hasLegacyStreamAbi() && mStream->set_audio_description_mix_level != nullptr
+                    ? Stream::analyzeStatus(
+                              "set_audio_description_mix_level",
+                              mStream->set_audio_description_mix_level(mStream, leveldB))
+@@ -719,7 +719,7 @@ Return<Result> StreamOut::setAudioDescriptionMixLevel(float leveldB) {
+ Return<void> StreamOut::getPlaybackRateParameters(getPlaybackRateParameters_cb _hidl_cb) {
+     audio_playback_rate_t rate = AUDIO_PLAYBACK_RATE_INITIALIZER;
+     Result retval =
+-            !mDevice->hasNougatAbi() && mStream->get_playback_rate_parameters != nullptr
++            !mDevice->hasLegacyStreamAbi() && mStream->get_playback_rate_parameters != nullptr
+                     ? Stream::analyzeStatus("get_playback_rate_parameters",
+                                             mStream->get_playback_rate_parameters(mStream, &rate))
+                     : Result::NOT_SUPPORTED;
+@@ -734,14 +734,14 @@ Return<Result> StreamOut::setPlaybackRateParameters(const PlaybackRate& playback
+             playbackRate.speed, playbackRate.pitch,
+             static_cast<audio_timestretch_stretch_mode_t>(playbackRate.timestretchMode),
+             static_cast<audio_timestretch_fallback_mode_t>(playbackRate.fallbackMode)};
+-    return !mDevice->hasNougatAbi() && mStream->set_playback_rate_parameters != nullptr
++    return !mDevice->hasLegacyStreamAbi() && mStream->set_playback_rate_parameters != nullptr
+                    ? Stream::analyzeStatus("set_playback_rate_parameters",
+                                            mStream->set_playback_rate_parameters(mStream, &rate))
+                    : Result::NOT_SUPPORTED;
+ }
+ 
+ Return<Result> StreamOut::setEventCallback(const sp<IStreamOutEventCallback>& callback) {
+-    if (mDevice->hasNougatAbi() || mStream->set_event_callback == nullptr) {
++    if (mDevice->hasLegacyStreamAbi() || mStream->set_event_callback == nullptr) {
+         return Result::NOT_SUPPORTED;
+     }
+     int result = mStream->set_event_callback(mStream, StreamOut::asyncEventCallback, this);
+@@ -778,7 +778,7 @@ int StreamOut::asyncEventCallback(stream_event_callback_type_t event, void* para
+ 
+ #if MAJOR_VERSION == 7 && MINOR_VERSION == 1
+ Return<Result> StreamOut::setLatencyMode(LatencyMode mode) {
+-    return !mDevice->hasNougatAbi() && mStream->set_latency_mode != nullptr
++    return !mDevice->hasLegacyStreamAbi() && mStream->set_latency_mode != nullptr
+                    ? Stream::analyzeStatus(
+                              "set_latency_mode",
+                              mStream->set_latency_mode(mStream,
+@@ -792,7 +792,7 @@ Return<void> StreamOut::getRecommendedLatencyModes(getRecommendedLatencyModes_cb
+     size_t num_modes = AUDIO_LATENCY_MODE_CNT;
+     audio_latency_mode_t modes[AUDIO_LATENCY_MODE_CNT];
+ 
+-    if (!mDevice->hasNougatAbi() && mStream->get_recommended_latency_modes != nullptr &&
++    if (!mDevice->hasLegacyStreamAbi() && mStream->get_recommended_latency_modes != nullptr &&
+         mStream->get_recommended_latency_modes(mStream, &modes[0], &num_modes) == 0) {
+         if (num_modes == 0 || num_modes > AUDIO_LATENCY_MODE_CNT) {
+             ALOGW("%s invalid number of modes returned: %zu", __func__, num_modes);
+@@ -832,7 +832,7 @@ void StreamOut::latencyModeCallback(audio_latency_mode_t* modes, size_t num_mode
+ 
+ Return<Result> StreamOut::setLatencyModeCallback(
+         const sp<IStreamOutLatencyModeCallback>& callback) {
+-    if (mDevice->hasNougatAbi() || mStream->set_latency_mode_callback == nullptr) {
++    if (mDevice->hasLegacyStreamAbi() || mStream->set_latency_mode_callback == nullptr) {
+         return Result::NOT_SUPPORTED;
+     }
+     int result = mStream->set_latency_mode_callback(mStream, StreamOut::latencyModeCallback, this);
+diff --git a/audio/core/all-versions/default/include/core/default/Device.h b/audio/core/all-versions/default/include/core/default/Device.h
+index ea1ef8c..2808de8 100644
+--- a/audio/core/all-versions/default/include/core/default/Device.h
++++ b/audio/core/all-versions/default/include/core/default/Device.h
+@@ -53,7 +53,8 @@ using AudioInputFlags = CoreUtils::AudioInputFlags;
+ using AudioOutputFlags = CoreUtils::AudioOutputFlags;
+ 
+ struct Device : public IDevice, public ParametersUtil {
+-    explicit Device(audio_hw_device_t* device, bool hasNougatAbi = false);
++    explicit Device(audio_hw_device_t* device, bool hasNougatAbi = false,
++                    bool hasOreoAbi = false);
+ 
+     // Methods from ::android::hardware::audio::CPP_VERSION::IDevice follow.
+     Return<Result> initCheck() override;
+@@ -186,11 +187,14 @@ struct Device : public IDevice, public ParametersUtil {
+     // Audio patches are reported as unsupported, so AudioFlinger routes the streams with
+     // set_parameters("routing=..."), as for a pre-3.0 HAL.
+     bool hasNougatAbi() const { return mHasNougatAbi; }
++    // Streams of a Nougat or Oreo HAL end before update_*_metadata.
++    bool hasLegacyStreamAbi() const { return mHasNougatAbi || mHasOreoAbi; }
+ 
+   private:
+     bool mIsClosed;
+     audio_hw_device_t* mDevice;
+     const bool mHasNougatAbi;
++    const bool mHasOreoAbi;
+     int mOpenedStreamsCount = 0;
+ 
+     virtual ~Device();
+-- 
+2.25.1
+

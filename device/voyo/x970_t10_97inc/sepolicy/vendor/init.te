@@ -1,0 +1,24 @@
+# init validates contexts of the MTK service sockets and seclabels.
+allow init kernel:security check_context;
+# No loadable modules on this kernel.
+dontaudit init kernel:system module_request;
+
+# init.rc chmods /proc/last_kmsg; BootReceiver copies it to dropbox.
+allow init proc_mtk_last_kmsg:file { getattr setattr };
+allow system_server proc_mtk_last_kmsg:file r_file_perms;
+
+# Boot-time markers and the PPM core floor (init.voyo.rc.in).
+allow { init vendor_init } proc_bootprof:file { getattr setattr w_file_perms };
+allow vendor_init proc_ppm:dir search;
+allow vendor_init proc_ppm:file { getattr setattr w_file_perms };
+allow { init vendor_init } sysfs_leds:file { getattr setattr w_file_perms };
+
+# MediaTek data directories created from init.mt6797.rc.
+allow vendor_init { mnld_data_file nfc_socket }:dir create_dir_perms;
+allow vendor_init nvcfg_file:dir { setattr r_dir_perms relabelfrom };
+allow vendor_init rootfs:dir { setattr r_dir_perms };
+
+# Kernel firmware loading (WMT, Wi-Fi, BT patches) reads /vendor/firmware.
+allow kernel vendor_fw_file:dir search;
+allow kernel vendor_fw_file:file r_file_perms;
+r_dir_file({ ueventd mtk_stock_domain }, vendor_fw_file)

@@ -1,0 +1,37 @@
+From 178f7fba80054526f57f21556546896a86a4db06 Mon Sep 17 00:00:00 2001
+From: TWRP Builder <builder@localhost>
+Date: Mon, 2 Nov 2026 22:18:14 +0100
+Subject: [PATCH 16/22] usb: f_fs: use USER_DS when copying AIO reads from the
+ worker
+
+---
+ kernel-3.18/drivers/usb/gadget/function/f_fs.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/kernel-3.18/drivers/usb/gadget/function/f_fs.c b/kernel-3.18/drivers/usb/gadget/function/f_fs.c
+index 1fc0f1176..57e92ebd6 100644
+--- a/kernel-3.18/drivers/usb/gadget/function/f_fs.c
++++ b/kernel-3.18/drivers/usb/gadget/function/f_fs.c
+@@ -667,8 +667,11 @@ static void ffs_user_copy_worker(struct work_struct *work)
+ 		 * being rounded up to maxpacketsize), we may end up with more
+ 		 * data then user space has space for.
+ 		 */
++		mm_segment_t oldfs = get_fs();
++
+ 		ret = min_t(int, ret, io_data->len);
+ 
++		set_fs(USER_DS);
+ 		use_mm(io_data->mm);
+ 		for (i = 0; i < io_data->nr_segs; i++) {
+ 			size_t len = min_t(size_t, ret - pos,
+@@ -683,6 +686,7 @@ static void ffs_user_copy_worker(struct work_struct *work)
+ 			pos += len;
+ 		}
+ 		unuse_mm(io_data->mm);
++		set_fs(oldfs);
+ 	}
+ 
+ 	aio_complete(io_data->kiocb, ret, ret);
+-- 
+2.25.1
+

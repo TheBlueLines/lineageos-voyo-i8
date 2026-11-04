@@ -1,0 +1,36 @@
+From 41f005f620aefadf33046cd6784bb9a615346024 Mon Sep 17 00:00:00 2001
+From: TWRP Builder <builder@localhost>
+Date: Wed, 4 Nov 2026 09:21:49 +0100
+Subject: [PATCH 22/22] x970_t10_97inc_defconfig: FM radio off, ext4 encryption
+ for FBE
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig b/kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig
+index 89b13ceb2..a2b966054 100644
+--- a/kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig
++++ b/kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig
+@@ -1410,7 +1410,7 @@ CONFIG_MTK_GPS=y
+ CONFIG_MTK_GPS_SUPPORT=y
+ # CONFIG_MTK_GPS_REGISTER_SETTING is not set
+ # CONFIG_MTK_GPS_EMI is not set
+-CONFIG_MTK_FMRADIO=y
++# CONFIG_MTK_FMRADIO is not set
+ CONFIG_MTK_FM_CHIP="MT6631_FM"
+ # CONFIG_MTK_FM_50KHZ_SUPPORT is not set
+ # CONFIG_MTK_MERGE_INTERFACE_SUPPORT is not set
+@@ -3276,7 +3276,7 @@ CONFIG_EXT4_FS=y
+ CONFIG_EXT4_USE_FOR_EXT23=y
+ # CONFIG_EXT4_FS_POSIX_ACL is not set
+ CONFIG_EXT4_FS_SECURITY=y
+-# CONFIG_EXT4_ENCRYPTION is not set
++CONFIG_EXT4_ENCRYPTION=y
+ CONFIG_JBD2=y
+ # CONFIG_JBD2_DEBUG is not set
+ CONFIG_FS_MBCACHE=y
+-- 
+2.25.1
+

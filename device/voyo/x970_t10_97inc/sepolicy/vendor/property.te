@@ -1,0 +1,16 @@
+# Read-only MediaTek feature flags from /vendor/build.prop (ro.mtk_*,
+# ro.mediatek.*). Android 8 let every domain read default_prop, where these
+# lived; the stock blobs, HALs and framework processes all read them.
+vendor_restricted_prop(vendor_mtk_feature_prop)
+# Device flags read by patched framework code (audio ABI, VINTF).
+vendor_restricted_prop(vendor_voyo_prop)
+
+# init loads /vendor/build.prop with vendor_init's permissions; in enforcing
+# mode every property vendor_init may not set is dropped. The stock build.prop
+# (Android 8, no namespaces) sets these, including the MTK radio/Wi-Fi and
+# unprefixed persist.* defaults the blobs read back.
+set_prop(vendor_init, {
+    vendor_mtk_feature_prop vendor_voyo_prop
+    usp_prop wmt_prop mediatek_prop bt_prop mtk_volte_prop mtk_em_ims_prop
+    default_prop radio_prop system_prop
+})

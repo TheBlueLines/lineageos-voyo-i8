@@ -1,0 +1,4 @@
+ro.mtk_             u:object_r:vendor_mtk_feature_prop:s0
+ro.mediatek.        u:object_r:vendor_mtk_feature_prop:s0
+ro.vendor.audio.legacy_oreo_abi  u:object_r:vendor_voyo_prop:s0 exact bool
+ro.vendor.vintf.legacy_kernel    u:object_r:vendor_voyo_prop:s0 exact bool

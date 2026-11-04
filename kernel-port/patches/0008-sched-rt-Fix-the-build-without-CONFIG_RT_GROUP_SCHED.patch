@@ -1,0 +1,28 @@
+From ae7ac9448636c89831f55cac3ae8ff0b1480b321 Mon Sep 17 00:00:00 2001
+From: voyo-port <port@localhost>
+Date: Fri, 30 Oct 2026 19:56:32 +0100
+Subject: [PATCH 08/22] sched/rt: Fix the build without CONFIG_RT_GROUP_SCHED
+
+From android_kernel_meizu_m95 by nomorecoolnicknames.
+---
+ kernel-3.18/kernel/sched/rt.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/kernel-3.18/kernel/sched/rt.c b/kernel-3.18/kernel/sched/rt.c
+index ec31e8d63..600beaf12 100644
+--- a/kernel-3.18/kernel/sched/rt.c
++++ b/kernel-3.18/kernel/sched/rt.c
+@@ -1103,7 +1103,9 @@ static int sched_rt_runtime_exceeded(struct rt_rq *rt_rq)
+ 					cpu, rt_rq->rt_throttled);
+ 			per_cpu(rt_throttling_start, cpu) = rq_clock_task(rt_rq->rq);
+ #endif
+-#ifdef CONFIG_MT_RT_THROTTLE_MON
++/* This monitor block uses the cpu declared inside the CONFIG_RT_GROUP_SCHED
++ * block above and does not compile without it. */
++#if defined(CONFIG_MT_RT_THROTTLE_MON) && defined(CONFIG_RT_GROUP_SCHED)
+ 			/* sched:rt throttle monitor */
+ 			mt_rt_mon_switch(MON_STOP, cpu);
+ 			mt_rt_mon_print_task(cpu);
+-- 
+2.25.1
+

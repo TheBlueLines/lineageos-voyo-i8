@@ -1,0 +1,11 @@
+# GED (/proc/ged) is used per frame by gralloc, EGL and the composer, so every
+# process that renders needs it: apps, surfaceflinger, bootanimation and
+# system_server (its UI threads).
+define(`ged_users', `{ hal_graphics_composer_default hal_graphics_allocator_default surfaceflinger bootanim system_server appdomain mtk_hal_camera }')
+allow ged_users proc_ged:file { open read write ioctl getattr };
+# Android 13 restricts ioctls to listed commands; GED uses magic 'g' (0x67).
+allowxperm ged_users proc_ged:file ioctl { 0x6700-0x67ff };
+
+# The Mali user driver reads the DVFS tables in-process.
+allow ged_users proc_gpufreq:dir search;
+allow ged_users proc_gpufreq:file r_file_perms;

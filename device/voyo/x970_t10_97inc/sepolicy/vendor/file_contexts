@@ -1,0 +1,71 @@
+# Mount points in the root of /system for the MediaTek NV partitions.
+/nvdata     u:object_r:rootfs:s0
+/nvcfg      u:object_r:rootfs:s0
+/protect_f  u:object_r:rootfs:s0
+/protect_s  u:object_r:rootfs:s0
+
+# GPU and display nodes. Unlabelled (device) they were denied on every
+# ioctl, and permissive mode on 3.18 does not cache ioctl grants, so each
+# frame produced audit records (~230/s were dropped).
+/dev/mali0          u:object_r:gpu_device:s0
+/dev/mtk_disp_mgr   u:object_r:graphics_device:s0
+
+# The Android 8 vndservicemanager, kept for the stock vendor binder clients.
+/vendor/bin/vndservicemanager_o  u:object_r:vndservicemanager_exec:s0
+
+# Same-process HALs: gralloc.mt6797 and the libraries it pulls into every
+# app, surfaceflinger and zygote (from /proc/<pid>/maps on the tablet).
+/vendor/lib(64)?/a8droid\.hardware\.graphics\.common@1\.0\.so u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/a8droid\.hidl\.base@1\.0\.so                u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/a8droid\.hidl\.memory@1\.0\.so              u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/hw/gralloc\.mt6797\.so                      u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/hw/vulkan\.mt6797\.so                       u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/l8bbacktrace\.so                            u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/l8bbase\.so                                 u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/l8bbinder\.so                               u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/l8bcutils\.so                               u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/l8bdl\.so                                   u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/l8bhardware\.so                             u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/l8bhidlbase\.so                             u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/l8bhidlmemory\.so                           u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/l8bhidltransport\.so                        u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/l8bhwbinder\.so                             u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/l8bion\.so                                  u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/l8blzma\.so                                 u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/l8bstdc\+\+\.so                               u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/l8bunwind\.so                               u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/l8butils\.so                                u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libaedv\.so                                 u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libbwc\.so                                  u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libdpframework\.so                          u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libged\.so                                  u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libgpu_aux\.so                              u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libgralloc_extra\.so                        u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libion_mtk\.so                              u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libion_ulit\.so                             u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libm4u\.so                                  u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libmp4enc_sa\.ca7\.so                       u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libmrdumpv\.so                              u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libmtk_drvb\.so                             u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libperfservicenative\.so                    u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libpq_cust\.so                              u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libpq_cust_base\.so                         u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libpq_prot\.so                              u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libvc1dec_sa\.ca7\.so                       u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libvcodec_oal\.so                           u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libvcodec_utility\.so                       u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libvcodecdrv\.so                            u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libvp8dec_sa\.ca7\.so                       u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/vendor\.mediatek\.hardware\.pq@2\.0_vendor\.so u:object_r:same_process_hal_file:s0
+
+# Kernel-loaded firmware (WMT, Wi-Fi and BT patches).
+/vendor/firmware(/.*)?                  u:object_r:vendor_fw_file:s0
+
+# GPS daemon data, created by init.mt6797.rc.
+/data/gps_mnl(/.*)?                     u:object_r:mnld_data_file:s0
+/data/mpe_mnl(/.*)?                     u:object_r:mnld_data_file:s0
+
+/dev/socket/wfca(_rds)?                 u:object_r:wfca_socket:s0
+/dev/socket/msap_c2k_socket[1-4]        u:object_r:msap_c2k_socket:s0
+/dev/socket/rildc-debug                 u:object_r:msap_c2k_socket:s0
+/dev/socket/rild-atci-c2k                u:object_r:msap_c2k_socket:s0

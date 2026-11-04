@@ -1,0 +1,62 @@
+From d8bee1ec11c1cef9db80480a5dee88bdb29153be Mon Sep 17 00:00:00 2001
+From: voyo-port <port@localhost>
+Date: Fri, 30 Oct 2026 19:59:02 +0100
+Subject: [PATCH 12/22] bpf: Fix the build on 3.18.79
+
+---
+ kernel-3.18/.gitignore                                  | 1 +
+ kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig | 3 ---
+ kernel-3.18/kernel/bpf/verifier.c                       | 3 ++-
+ 3 files changed, 3 insertions(+), 4 deletions(-)
+ create mode 100644 kernel-3.18/.gitignore
+
+diff --git a/kernel-3.18/.gitignore b/kernel-3.18/.gitignore
+new file mode 100644
+index 000000000..89f9ac04a
+--- /dev/null
++++ b/kernel-3.18/.gitignore
+@@ -0,0 +1 @@
++out/
+diff --git a/kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig b/kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig
+index e4a701164..45651500e 100644
+--- a/kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig
++++ b/kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig
+@@ -3836,14 +3836,11 @@ CONFIG_NETFILTER_XT_MATCH_BPF=y
+ CONFIG_IP_NF_MATCH_RPFILTER=y
+ CONFIG_NET_CLS_BPF=y
+ CONFIG_BPF_JIT=y
+-CONFIG_DM_DEBUG=y
+-CONFIG_EXT4_DEBUG=y
+ CONFIG_F2FS_FS=y
+ CONFIG_F2FS_STAT_FS=y
+ CONFIG_F2FS_FS_XATTR=y
+ CONFIG_F2FS_FS_POSIX_ACL=y
+ CONFIG_F2FS_FS_SECURITY=y
+-CONFIG_F2FS_CHECK_FS=y
+ CONFIG_KEYS=y
+ CONFIG_CRYPTO_CMAC=y
+ CONFIG_CRYPTO_CRC32=y
+diff --git a/kernel-3.18/kernel/bpf/verifier.c b/kernel-3.18/kernel/bpf/verifier.c
+index bbab7dfb4..bbced4711 100644
+--- a/kernel-3.18/kernel/bpf/verifier.c
++++ b/kernel-3.18/kernel/bpf/verifier.c
+@@ -202,6 +202,7 @@ struct verifier_stack_elem {
+  * one verifier_env per bpf_check() call
+  */
+ struct verifier_env {
++	bool allow_ptr_leaks;
+ 	struct bpf_prog *prog;		/* eBPF program being verified */
+ 	struct verifier_stack_elem *head; /* stack of verifier states to be processed */
+ 	int stack_size;			/* number of states to be processed */
+@@ -323,7 +324,7 @@ static const char *const bpf_jmp_string[] = {
+ 	[BPF_EXIT >> 4] = "exit",
+ };
+ 
+-static void print_bpf_insn(const struct bpf_verifier_env *env,
++static void print_bpf_insn(const struct verifier_env *env,
+ 			   const struct bpf_insn *insn)
+ {
+ 	u8 class = BPF_CLASS(insn->code);
+-- 
+2.25.1
+

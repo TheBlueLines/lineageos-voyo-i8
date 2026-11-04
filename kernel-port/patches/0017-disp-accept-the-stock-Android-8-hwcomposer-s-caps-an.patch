@@ -1,0 +1,109 @@
+From 8ec43052ddce38c38fc2b170629f4dd8163d0431 Mon Sep 17 00:00:00 2001
+From: TWRP Builder <builder@localhost>
+Date: Mon, 2 Nov 2026 23:31:10 +0100
+Subject: [PATCH 17/22] disp: accept the stock Android 8 hwcomposer's caps and
+ input buffer ioctls
+
+---
+ .../video/mt6797/videox/mtk_disp_mgr.c        | 36 +++++++++++++++----
+ 1 file changed, 30 insertions(+), 6 deletions(-)
+
+diff --git a/kernel-3.18/drivers/misc/mediatek/video/mt6797/videox/mtk_disp_mgr.c b/kernel-3.18/drivers/misc/mediatek/video/mt6797/videox/mtk_disp_mgr.c
+index 05faafd72..065435113 100644
+--- a/kernel-3.18/drivers/misc/mediatek/video/mt6797/videox/mtk_disp_mgr.c
++++ b/kernel-3.18/drivers/misc/mediatek/video/mt6797/videox/mtk_disp_mgr.c
+@@ -1042,18 +1042,24 @@ static int __set_input(disp_session_input_config *session_input, int overlap_lay
+ 
+ }
+ 
+-int _ioctl_set_input_buffer(unsigned long arg)
++/* Sizes the stock Android 8 hwcomposer uses, see disp_compat_kernel.sh. */
++#define DISP_O_CAPS_SIZE	60
++#define DISP_O_INPUT_SIZE	(sizeof(disp_session_input_config) - sizeof(struct disp_ccorr_config))
++#define DISP_IOCTL_GET_DISPLAY_CAPS_O	_IOC(_IOC_WRITE, 'O', 219, DISP_O_CAPS_SIZE)
++#define DISP_IOCTL_SET_INPUT_BUFFER_O	_IOC(_IOC_WRITE, 'O', 206, DISP_O_INPUT_SIZE)
++
++static int __ioctl_set_input_buffer(unsigned long arg, size_t size)
+ {
+ 	int ret = 0;
+ 	void __user *argp = (void __user *)arg;
+ 	disp_session_input_config *session_input;
+ 
+-	session_input = kmalloc(sizeof(*session_input), GFP_KERNEL);
++	session_input = kzalloc(sizeof(*session_input), GFP_KERNEL);
+ 
+ 	if (!session_input)
+ 		return -ENOMEM;
+ 
+-	if (copy_from_user(session_input, argp, sizeof(*session_input))) {
++	if (copy_from_user(session_input, argp, size)) {
+ 		DISPERR("[FB]: copy_from_user failed! line:%d\n", __LINE__);
+ 		kfree(session_input);
+ 		return -EFAULT;
+@@ -1068,6 +1074,11 @@ int _ioctl_set_input_buffer(unsigned long arg)
+ 	return ret;
+ }
+ 
++int _ioctl_set_input_buffer(unsigned long arg)
++{
++	return __ioctl_set_input_buffer(arg, sizeof(disp_session_input_config));
++}
++
+ static int _sync_convert_fb_layer_to_disp_output(unsigned int session_id, disp_output_config *src,
+ 						 disp_mem_output_config *dst, unsigned int dst_mva)
+ {
+@@ -1401,13 +1412,13 @@ int _ioctl_get_is_driver_suspend(unsigned long arg)
+ 	return ret;
+ }
+ 
+-int _ioctl_get_display_caps(unsigned long arg)
++static int __ioctl_get_display_caps(unsigned long arg, size_t size)
+ {
+ 	int ret = 0;
+ 	disp_caps_info caps_info;
+ 	void __user *argp = (void __user *)arg;
+ 
+-	if (copy_from_user(&caps_info, argp, sizeof(caps_info))) {
++	if (copy_from_user(&caps_info, argp, size)) {
+ 		DISPERR("[FB]: copy_to_user failed! line:%d\n", __LINE__);
+ 		ret = -EFAULT;
+ 	}
+@@ -1445,7 +1456,11 @@ int _ioctl_get_display_caps(unsigned long arg)
+ 	DISPDBG("%s mode:%d, pass:%d, max_layer_num:%d\n",
+ 		__func__, caps_info.output_mode, caps_info.output_pass, caps_info.max_layer_num);
+ 
+-	if (copy_to_user(argp, &caps_info, sizeof(caps_info))) {
++	/* The stock kernel leaves everything after lcm_degree zero. */
++	if (size < sizeof(caps_info))
++		memset((char *)&caps_info + offsetof(disp_caps_info, rsz_in_res_list), 0,
++		       sizeof(caps_info) - offsetof(disp_caps_info, rsz_in_res_list));
++	if (copy_to_user(argp, &caps_info, size)) {
+ 		DISPERR("[FB]: copy_to_user failed! line:%d\n", __LINE__);
+ 		ret = -EFAULT;
+ 	}
+@@ -1453,6 +1468,11 @@ int _ioctl_get_display_caps(unsigned long arg)
+ 	return ret;
+ }
+ 
++int _ioctl_get_display_caps(unsigned long arg)
++{
++	return __ioctl_get_display_caps(arg, sizeof(disp_caps_info));
++}
++
+ int _ioctl_wait_vsync(unsigned long arg)
+ {
+ 	int ret = 0;
+@@ -1680,6 +1700,10 @@ long mtk_disp_mgr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+ 		{
+ 			return _ioctl_set_input_buffer(arg);
+ 		}
++	case DISP_IOCTL_SET_INPUT_BUFFER_O:
++		return __ioctl_set_input_buffer(arg, DISP_O_INPUT_SIZE);
++	case DISP_IOCTL_GET_DISPLAY_CAPS_O:
++		return __ioctl_get_display_caps(arg, DISP_O_CAPS_SIZE);
+ 	case DISP_IOCTL_WAIT_FOR_VSYNC:
+ 		{
+ 			return _ioctl_wait_vsync(arg);
+-- 
+2.25.1
+

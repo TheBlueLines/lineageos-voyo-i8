@@ -1,0 +1,14 @@
+type proc_ged, fs_type, proc_type;
+# /proc/bootprof: boot-time markers written from the MTK init scripts.
+type proc_bootprof, fs_type, proc_type;
+# /proc/ppm: MediaTek CPU core/frequency limits (PPM).
+type proc_ppm, fs_type, proc_type;
+# /proc/gpufreq: Mali DVFS tables, read by the GPU driver stack in-process.
+type proc_gpufreq, fs_type, proc_type;
+# /proc/last_kmsg: MTK's previous-boot kernel log, kept by the bootloader.
+type proc_mtk_last_kmsg, fs_type, proc_type;
+# /vendor/firmware: WMT/Wi-Fi/BT patches, loaded by the kernel itself.
+type vendor_fw_file, vendor_file_type, file_type;
+# Sockets init creates for the stock radio daemons (rc "socket" lines).
+type wfca_socket, file_type;
+type msap_c2k_socket, file_type;

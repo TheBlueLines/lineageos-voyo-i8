@@ -1,0 +1,27 @@
+From 7f9931f013bcd68ce74d2fae9684782c86dc82a5 Mon Sep 17 00:00:00 2001
+From: TWRP Builder <builder@localhost>
+Date: Wed, 4 Nov 2026 09:21:49 +0100
+Subject: [PATCH 21/22] mc3410: log samples at debug level, not error
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../mediatek/sensors-1.0/accelerometer/mc3410-i2c/mc3410-i2c.h | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/kernel-3.18/drivers/misc/mediatek/sensors-1.0/accelerometer/mc3410-i2c/mc3410-i2c.h b/kernel-3.18/drivers/misc/mediatek/sensors-1.0/accelerometer/mc3410-i2c/mc3410-i2c.h
+index 7576fc8dc..d25d1a2a2 100644
+--- a/kernel-3.18/drivers/misc/mediatek/sensors-1.0/accelerometer/mc3410-i2c/mc3410-i2c.h
++++ b/kernel-3.18/drivers/misc/mediatek/sensors-1.0/accelerometer/mc3410-i2c/mc3410-i2c.h
+@@ -40,7 +40,8 @@
+ #define GSE_TAG                  "[Gsensor] "
+ #define GSE_FUN(f)               pr_debug(GSE_TAG"%s\n", __func__)
+ #define GSE_ERR(fmt, args...)    pr_err(GSE_TAG"%s %d : "fmt, __func__, __LINE__, ##args)
+-#define GSE_LOG(fmt, args...)    pr_err(GSE_TAG fmt, ##args)
++/* Informational: pr_err here printed 3 lines per sample while the sensor was on. */
++#define GSE_LOG(fmt, args...)    pr_debug(GSE_TAG fmt, ##args)
+ 
+ 
+ /***********************************************
+-- 
+2.25.1
+

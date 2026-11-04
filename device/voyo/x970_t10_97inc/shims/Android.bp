@@ -1,0 +1,27 @@
+// Same-length stand-ins for libraries the Android 8 blobs link. Each provides
+// what Android 13 removed or hides from vendor code and needs the real
+// library for everything else. gen_vendor.py points the blobs at them.
+
+// Linker namespace functions, moved to libdl_android.
+cc_library_shared {
+    name: "l8bdl",
+    vendor: true,
+    srcs: ["l8bdl.c"],
+    shared_libs: ["libdl"],
+}
+
+// eglQueryStringImplementationANDROID with C++ linkage, as Android 8 libgui
+// declared it.
+cc_library_shared {
+    name: "l8bEGL",
+    vendor: true,
+    srcs: ["l8bEGL.cpp"],
+    shared_libs: ["libEGL"],
+}
+
+// Malloc debugging functions, private to the platform since Android 10.
+cc_library_shared {
+    name: "l8bc",
+    vendor: true,
+    srcs: ["l8bc.c"],
+}

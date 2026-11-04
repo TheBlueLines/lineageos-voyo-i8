@@ -1,0 +1,54 @@
+From af28e3076023f965afa4218337ed6dd0bf3aee66 Mon Sep 17 00:00:00 2001
+From: voyo-port <port@localhost>
+Date: Fri, 30 Oct 2026 19:56:33 +0100
+Subject: [PATCH 10/22] scripts: Fix host tool builds with newer toolchains
+
+From android_kernel_meizu_m95 by nomorecoolnicknames.
+---
+ kernel-3.18/scripts/Makefile.host               | 2 +-
+ kernel-3.18/scripts/dtc/dtc-lexer.l             | 2 +-
+ kernel-3.18/scripts/dtc/dtc-lexer.lex.c_shipped | 2 +-
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/kernel-3.18/scripts/Makefile.host b/kernel-3.18/scripts/Makefile.host
+index 133edfae5..a89a0c5d4 100644
+--- a/kernel-3.18/scripts/Makefile.host
++++ b/kernel-3.18/scripts/Makefile.host
+@@ -85,7 +85,7 @@ hostcxx_flags  = -Wp,-MD,$(depfile) $(__hostcxx_flags)
+ # Create executable from a single .c file
+ # host-csingle -> Executable
+ quiet_cmd_host-csingle 	= HOSTCC  $@
+-      cmd_host-csingle	= $(HOSTCC) $(hostc_flags) -o $@ $< \
++      cmd_host-csingle	= $(HOSTCC) $(hostc_flags) $(HOSTLDFLAGS) -o $@ $< \
+ 	  	$(HOST_LOADLIBES) $(HOSTLOADLIBES_$(@F))
+ $(host-csingle): $(obj)/%: $(src)/%.c FORCE
+ 	$(call if_changed_dep,host-csingle)
+diff --git a/kernel-3.18/scripts/dtc/dtc-lexer.l b/kernel-3.18/scripts/dtc/dtc-lexer.l
+index 3b41bfca6..9b9c29e6f 100644
+--- a/kernel-3.18/scripts/dtc/dtc-lexer.l
++++ b/kernel-3.18/scripts/dtc/dtc-lexer.l
+@@ -39,7 +39,7 @@ LINECOMMENT	"//".*\n
+ #include "srcpos.h"
+ #include "dtc-parser.tab.h"
+ 
+-YYLTYPE yylloc;
++extern YYLTYPE yylloc;
+ 
+ /* CAUTION: this will stop working if we ever use yyless() or yyunput() */
+ #define	YY_USER_ACTION \
+diff --git a/kernel-3.18/scripts/dtc/dtc-lexer.lex.c_shipped b/kernel-3.18/scripts/dtc/dtc-lexer.lex.c_shipped
+index 2d30f4177..d0eb405cb 100644
+--- a/kernel-3.18/scripts/dtc/dtc-lexer.lex.c_shipped
++++ b/kernel-3.18/scripts/dtc/dtc-lexer.lex.c_shipped
+@@ -637,7 +637,7 @@ char *yytext;
+ #include "srcpos.h"
+ #include "dtc-parser.tab.h"
+ 
+-YYLTYPE yylloc;
++extern YYLTYPE yylloc;
+ 
+ /* CAUTION: this will stop working if we ever use yyless() or yyunput() */
+ #define	YY_USER_ACTION \
+-- 
+2.25.1
+

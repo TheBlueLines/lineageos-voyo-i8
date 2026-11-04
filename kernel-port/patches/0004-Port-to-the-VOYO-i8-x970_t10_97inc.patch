@@ -1,0 +1,22 @@
+From 157ff62b827963156d3b92e7fdaee3c3da76e0d0 Mon Sep 17 00:00:00 2001
+From: voyo-port <port@localhost>
+Date: Fri, 30 Oct 2026 19:49:59 +0100
+Subject: [PATCH 04/22] Port to the VOYO i8 (x970_t10_97inc)
+
+---
+ kernel-3.18/drivers/misc/mediatek/power/mt6797/bq25890.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/kernel-3.18/drivers/misc/mediatek/power/mt6797/bq25890.c b/kernel-3.18/drivers/misc/mediatek/power/mt6797/bq25890.c
+index be74c5488..5a9d9a96f 100755
+--- a/kernel-3.18/drivers/misc/mediatek/power/mt6797/bq25890.c
++++ b/kernel-3.18/drivers/misc/mediatek/power/mt6797/bq25890.c
+@@ -1234,4 +1234,4 @@ MODULE_DESCRIPTION("I2C bq25890 Driver");
+ MODULE_AUTHOR("will cai <will.cai@mediatek.com>");
+ 
+ /* Read by the xHCI driver; this charger needs no wait. */
+-int chargin_hw_init_done_rt = 1;
++kal_bool chargin_hw_init_done_rt = KAL_TRUE;
+-- 
+2.25.1
+

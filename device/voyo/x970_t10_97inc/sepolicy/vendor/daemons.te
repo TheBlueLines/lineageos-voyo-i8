@@ -1,0 +1,53 @@
+# Daemon needs not covered by the stock Android 8 policy.
+
+# Health HAL: the battery is /sys/devices/platform/battery/power_supply.
+r_dir_file(hal_health_default, sysfs_power_supply)
+
+# Thermal HAL reads the MTK thermal zones.
+r_dir_file(hal_thermal_default, proc_mtktz)
+
+# Stock audio module: headset switch state and the system effects config.
+allow hal_audio_default sysfs_switch:dir search;
+allow hal_audio_default system_file:file r_file_perms;
+
+# gralloc maps ashmem for buffer metadata.
+allow hal_graphics_allocator_default ashmem_device:chr_file r_file_perms;
+
+# libnvram parses /data/nvram/fstab.mt6797 (copied there by init).
+allow { mtk_hal_bluetooth mtk_stock_domain } nvram_data_file:dir search;
+allow { mtk_hal_bluetooth mtk_stock_domain } nvram_data_file:file r_file_perms;
+
+# Power HAL probes /data/tmp/smart (MTK smart-boost flag; absent here).
+dontaudit mtk_hal_power system_data_file:file r_file_perms;
+# stp_dump3 tries to save connsys dumps on the sdcard.
+dontaudit stp_dump3 fuse:dir rw_dir_perms;
+dontaudit stp_dump3 fuse:file create_file_perms;
+
+allow sysenv_daemon proc_lk_env:file ioctl;
+allow thermal_manager thermalloadalgod:unix_stream_socket connectto;
+
+# Service sockets for wfca and the C2K modem daemons.
+allow init { wfca_socket msap_c2k_socket }:sock_file { create setattr getattr unlink };
+allow mtk_stock_domain { wfca_socket msap_c2k_socket }:sock_file write;
+# sysenv_daemon reads/writes LK environment through /proc/lk_env ioctls ('e').
+allowxperm sysenv_daemon proc_lk_env:file ioctl { 0x6500-0x65ff };
+
+# Power HAL drives the PPM core/frequency limits.
+allow mtk_hal_power proc_ppm:dir search;
+allow mtk_hal_power proc_ppm:file rw_file_perms;
+
+# Platform processes probe unset ro.odm.*/vendor props; nothing to read.
+dontaudit { audioserver surfaceflinger system_server } vendor_default_prop:file r_file_perms;
+# Kernel threads following the sdcard symlinks (connsys dump path).
+dontaudit kernel fuse:dir search;
+dontaudit kernel { mnt_user_file storage_file }:lnk_file read;
+dontaudit kernel self:capability { dac_override dac_read_search };
+
+# ccci_mdinit polls init.svc.* of the modem daemons (a private platform type
+# vendor policy cannot name); denied, it just retries, ~1200 audits per boot.
+dontaudit ccci_mdinit property_type:file { read open getattr map };
+dontaudit mtk_hal_power system_data_file:file append;
+
+# eMMC block attributes (relabelled in genfs_contexts).
+r_dir_file(sysenv_daemon, sysfs_devices_block)
+allow init sysfs_devices_block:file w_file_perms;

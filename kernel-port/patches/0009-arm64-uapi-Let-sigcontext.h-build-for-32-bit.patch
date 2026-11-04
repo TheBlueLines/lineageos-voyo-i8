@@ -1,0 +1,34 @@
+From 2a988689589c032e64f6b6ba15d2cb33c0d48d4d Mon Sep 17 00:00:00 2001
+From: voyo-port <port@localhost>
+Date: Fri, 30 Oct 2026 19:56:32 +0100
+Subject: [PATCH 09/22] arm64: uapi: Let sigcontext.h build for 32-bit
+
+From android_kernel_meizu_m95 by nomorecoolnicknames.
+---
+ kernel-3.18/arch/arm64/include/uapi/asm/sigcontext.h | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/kernel-3.18/arch/arm64/include/uapi/asm/sigcontext.h b/kernel-3.18/arch/arm64/include/uapi/asm/sigcontext.h
+index ee469be1a..0dd5ec5a7 100644
+--- a/kernel-3.18/arch/arm64/include/uapi/asm/sigcontext.h
++++ b/kernel-3.18/arch/arm64/include/uapi/asm/sigcontext.h
+@@ -50,7 +50,16 @@ struct fpsimd_context {
+ 	struct _aarch64_ctx head;
+ 	__u32 fpsr;
+ 	__u32 fpcr;
++	/*
++	 * The installed arm64 uapi headers are also used by 32-bit ARM userspace
++	 * builds, where __uint128_t does not exist. A 32-bit process never uses
++	 * this frame; it only has to compile. Same layout: 32 x 128 == 64 x 64 bits.
++	 */
++#if defined(__SIZEOF_INT128__)
+ 	__uint128_t vregs[32];
++#else
++	__u64 vregs[64];
++#endif
+ };
+ 
+ /* ESR_EL1 context */
+-- 
+2.25.1
+

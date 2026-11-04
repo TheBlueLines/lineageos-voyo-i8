@@ -1,0 +1,47 @@
+From fed2546e97aa49b0a07a78c8ac508ac7fa1116de Mon Sep 17 00:00:00 2001
+From: David <davidfeher42@gmail.com>
+Date: Tue, 3 Nov 2026 10:03:36 +0100
+Subject: [PATCH] Match partner layout margins to setupdesign on tablets
+
+Without a partner provider the fallback setup_design_layout_margin_start
+is 40dp, while setupdesign's sw600dp-v31 sudMarginStart is 96dp, so
+LayoutStyler shifts sud_layout_content by -56dp and the header icon and
+title are drawn partly off-screen (e.g. Settings' Internet setup page).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Change-Id: Ife2f98482de462313d82765f5aa125e6c15344d8
+---
+ main/res/values-sw600dp-land/dimens.xml | 6 ++++++
+ main/res/values-sw600dp/config.xml      | 5 +++++
+ 2 files changed, 11 insertions(+)
+ create mode 100644 main/res/values-sw600dp-land/dimens.xml
+
+diff --git a/main/res/values-sw600dp-land/dimens.xml b/main/res/values-sw600dp-land/dimens.xml
+new file mode 100644
+index 0000000..7449f3a
+--- /dev/null
++++ b/main/res/values-sw600dp-land/dimens.xml
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <!-- Match setupdesign's sw600dp-land sud_glif_margin_start/end. -->
++    <dimen name="setup_design_layout_margin_end">48.0dip</dimen>
++    <dimen name="setup_design_layout_margin_start">48.0dip</dimen>
++</resources>
+diff --git a/main/res/values-sw600dp/config.xml b/main/res/values-sw600dp/config.xml
+index 8963f35..83fac6d 100644
+--- a/main/res/values-sw600dp/config.xml
++++ b/main/res/values-sw600dp/config.xml
+@@ -19,4 +19,9 @@
+     <!-- Pixel theme -->
+     <dimen name="setup_design_card_view_intrinsic_height">0.0dip</dimen>
+     <dimen name="setup_design_card_view_intrinsic_width">0.0dip</dimen>
++    <!-- Match setupdesign's sw600dp sud_glif_margin_start/end. Otherwise LayoutStyler
++         offsets the content by (partner margin - sudMarginStart) and the header ends up
++         drawn off-screen on tablets. -->
++    <dimen name="setup_design_layout_margin_end">96.0dip</dimen>
++    <dimen name="setup_design_layout_margin_start">96.0dip</dimen>
+ </resources>
+-- 
+2.25.1
+

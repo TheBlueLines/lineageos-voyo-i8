@@ -1,0 +1,9 @@
+# Legacy GLES RenderEngine: Skia-GL faults on this Mali generation.
+debug.renderengine.backend=gles
+
+# adbd: the 3.18 FunctionFS has no AIO, use the blocking path.
+ro.adb.nonblocking_ffs=false
+persist.sys.usb.config=adb
+
+# StrictMode off for system processes (the userdebug WTF dialog).
+persist.sys.strictmode.disable=true

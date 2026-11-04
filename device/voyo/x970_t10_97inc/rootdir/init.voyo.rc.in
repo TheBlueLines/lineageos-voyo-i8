@@ -1,0 +1,93 @@
+# VOYO i8 additions on top of the stock init.mt6797.rc, which follows this block.
+
+# The stock Android 8 service manager for /dev/vndbinder: vendor processes use
+# Android 8 parcels. Defined here so it wins over the AOSP rc, which is parsed
+# later from /vendor/etc/init.
+service vndservicemanager /vendor/bin/vndservicemanager_o /dev/vndbinder
+    class core
+    user system
+    group system readproc
+    writepid /dev/cpuset/system-background/tasks
+
+# The stock Wi-Fi HAL brings wlan0 up through an AF_INET socket, which this
+# kernel (ANDROID_PARANOID_NETWORK) only allows with NET_RAW/NET_ADMIN; the
+# stock rc gives it none. Defined here so it wins over the stock rc.
+service wifi_hal_legacy /vendor/bin/hw/android.hardware.wifi@1.0-service
+    class hal
+    user wifi
+    group wifi gps
+    capabilities NET_ADMIN NET_RAW
+
+on early-init
+    # memtrack walks /d/ion/clients.
+    mount debugfs debugfs /sys/kernel/debug
+    chmod 0755 /sys/kernel/debug
+    # This kernel otherwise only searches /lib/firmware*.
+    write /sys/module/firmware_class/parameters/path /vendor/firmware
+
+on init
+    setprop debug.renderengine.backend gles
+    # cameraserver and the camera provider write here. MT6797 has 10 cores.
+    mkdir /dev/cpuset/camera-daemon
+    write /dev/cpuset/camera-daemon/cpus 0-9
+    write /dev/cpuset/camera-daemon/mems 0
+    chown system system /dev/cpuset/camera-daemon
+    chown system system /dev/cpuset/camera-daemon/tasks
+    chmod 0664 /dev/cpuset/camera-daemon/tasks
+
+on fs
+    # Mount points for the MTK NV partitions.
+    mkdir /nvdata 0771 root system
+    mkdir /nvcfg 0771 root system
+    mkdir /protect_f 0771 system system
+    mkdir /protect_s 0771 system system
+
+on post-fs-data
+    # libnvram parses /data/nvram/fstab.<ro.hardware>; the Android 13 root has
+    # no fstab to copy. Audio, GPS and the modem wait on nvram_init.
+    mkdir /data/nvram 0771 root system
+    copy /vendor/etc/fstab.mt6797 /data/nvram/fstab.mt6797
+    chmod 0644 /data/nvram/fstab.mt6797
+    # The stock wpa_supplicant service reads these; on Android 8 wificond
+    # created them from the template, Android 13 only does ctl.start. Saved
+    # networks live in the framework's WifiConfigStore, so recopying is fine.
+    # gen_vendor.py moves the service from /data/misc/wifi (core data,
+    # vendor_init may not write it) to this vendor dir.
+    mkdir /data/vendor/wifi 0771 wifi wifi
+    mkdir /data/vendor/wifi/wpa 0770 wifi wifi
+    mkdir /data/vendor/wifi/wpa/sockets 0770 wifi wifi
+    copy /vendor/etc/wifi/wpa_supplicant.conf /data/vendor/wifi/wpa/wpa_supplicant.conf
+    copy /vendor/etc/wifi/wpa_supplicant.conf /data/vendor/wifi/wpa/p2p_supplicant.conf
+    chown wifi wifi /data/vendor/wifi/wpa/wpa_supplicant.conf
+    chown wifi wifi /data/vendor/wifi/wpa/p2p_supplicant.conf
+    chmod 0660 /data/vendor/wifi/wpa/wpa_supplicant.conf
+    chmod 0660 /data/vendor/wifi/wpa/p2p_supplicant.conf
+    setprop vold.post_fs_data_done 1
+
+# Bring-up logger, see rootdir/bin/voyo_diag.sh.
+service voyo_diag /system/bin/sh /vendor/bin/voyo_diag.sh
+    seclabel u:r:su:s0
+    user root
+    group root system log
+    oneshot
+    disabled
+
+on early-init
+    start voyo_diag
+
+# Once booted, adb works and the logger only costs: it streamed every log line
+# to /cache and ran sync every 2 s, which stalled the UI. Stopping the service
+# also kills its dmesg and logcat children.
+on property:sys.boot_completed=1
+    stop voyo_diag
+
+# CPU: by default HPS keeps 2 LITTLE cores online and the governor ramps late,
+# so UI frames (20.7 ms at 48 Hz) missed their deadline. Keep all 10 cores
+# online (4 LL + 4 L + 2 A72) and ramp at 80 % load. Idle cores still clock
+# down via cpufreq/cpuidle; thermal and low-battery limits in PPM still apply.
+on property:sys.boot_completed=1
+    write /proc/ppm/policy/userlimit_min_cpu_core "0 4"
+    write /proc/ppm/policy/userlimit_min_cpu_core "1 4"
+    write /proc/ppm/policy/userlimit_min_cpu_core "2 2"
+    write /sys/devices/system/cpu/cpufreq/interactive/go_hispeed_load 80
+    write /sys/devices/system/cpu/cpufreq/interactive/target_loads 80

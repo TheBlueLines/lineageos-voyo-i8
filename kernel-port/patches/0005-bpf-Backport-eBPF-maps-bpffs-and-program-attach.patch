@@ -1,0 +1,3557 @@
+From 13b8077884f1e44d6cd06bd123b3d4f9835f374b Mon Sep 17 00:00:00 2001
+From: voyo-port <port@localhost>
+Date: Fri, 30 Oct 2026 19:56:04 +0100
+Subject: [PATCH 05/22] bpf: Backport eBPF maps, bpffs and program attach
+
+From android_kernel_meizu_m95 by nomorecoolnicknames.
+---
+ kernel-3.18/include/linux/bpf.h        | 129 +++++-
+ kernel-3.18/include/linux/cgroup.h     |  15 +
+ kernel-3.18/include/uapi/linux/bpf.h   | 235 ++++++++++
+ kernel-3.18/include/uapi/linux/magic.h |   6 +
+ kernel-3.18/kernel/bpf/Makefile        |   2 +-
+ kernel-3.18/kernel/bpf/arraymap.c      | 436 +++++++++++++++++++
+ kernel-3.18/kernel/bpf/cgroup_stub.c   | 131 ++++++
+ kernel-3.18/kernel/bpf/core.c          |  19 +
+ kernel-3.18/kernel/bpf/hashtab.c       | 576 +++++++++++++++++++++++++
+ kernel-3.18/kernel/bpf/helpers.c       | 376 ++++++++++++++++
+ kernel-3.18/kernel/bpf/inode.c         | 425 ++++++++++++++++++
+ kernel-3.18/kernel/bpf/progtypes.c     | 271 ++++++++++++
+ kernel-3.18/kernel/bpf/syscall.c       | 246 ++++++++++-
+ kernel-3.18/kernel/bpf/verifier.c      | 150 ++++++-
+ kernel-3.18/kernel/cgroup.c            |   5 +
+ 15 files changed, 2981 insertions(+), 41 deletions(-)
+ create mode 100644 kernel-3.18/kernel/bpf/arraymap.c
+ create mode 100644 kernel-3.18/kernel/bpf/cgroup_stub.c
+ create mode 100644 kernel-3.18/kernel/bpf/hashtab.c
+ create mode 100644 kernel-3.18/kernel/bpf/helpers.c
+ create mode 100644 kernel-3.18/kernel/bpf/inode.c
+ create mode 100644 kernel-3.18/kernel/bpf/progtypes.c
+
+diff --git a/kernel-3.18/include/linux/bpf.h b/kernel-3.18/include/linux/bpf.h
+index cb4156a2c..217762aa9 100644
+--- a/kernel-3.18/include/linux/bpf.h
++++ b/kernel-3.18/include/linux/bpf.h
+@@ -10,6 +10,7 @@
+ #include <uapi/linux/bpf.h>
+ #include <linux/workqueue.h>
+ #include <linux/file.h>
++#include <linux/cpumask.h>
+ 
+ struct bpf_map;
+ 
+@@ -20,10 +21,30 @@ struct bpf_map_ops {
+ 	void (*map_free)(struct bpf_map *);
+ 	int (*map_get_next_key)(struct bpf_map *map, void *key, void *next_key);
+ 
+-	/* funcs callable from userspace and from eBPF programs */
++	/* Per-CPU maps (PERCPU_HASH/PERCPU_ARRAY) hold one value per CPU inside
++	 * a single element value block of map->value_size bytes.  The syscall
++	 * layer must see that whole block - the userspace ABI is
++	 * "BPF_MAP_LOOKUP_ELEM fills value_size * num_possible_cpus() bytes
++	 * packed by CPU index and BPF_MAP_UPDATE_ELEM consumes the same" - while
++	 * a program may only touch the current CPU's slice.  For those maps the
++	 * plain hooks below are the program-facing slice variants and these two
++	 * are the whole-block ones; syscall.c prefers them when they are set.
++	 * NULL means the plain hook has the syscall semantics as well. */
++	void *(*map_lookup_elem_sys_only)(struct bpf_map *map, void *key);
++	int (*map_update_elem_sys_only)(struct bpf_map *map, void *key,
++					void *value, u64 flags);
++
++	/* funcs callable from userspace and from eBPF programs.
++	 * The update prototype carries the BPF_ANY/BPF_NOEXIST/BPF_EXIST flag,
++	 * as in 4.4 - the map implementations ported from there rely on it. */
+ 	void *(*map_lookup_elem)(struct bpf_map *map, void *key);
+-	int (*map_update_elem)(struct bpf_map *map, void *key, void *value);
++	int (*map_update_elem)(struct bpf_map *map, void *key, void *value,
++			       u64 flags);
+ 	int (*map_delete_elem)(struct bpf_map *map, void *key);
++
++	/* funcs called by prog_array and perf_event_array map */
++	void *(*map_fd_get_ptr)(struct bpf_map *map, int fd);
++	void (*map_fd_put_ptr)(void *ptr);
+ };
+ 
+ struct bpf_map {
+@@ -32,13 +53,45 @@ struct bpf_map {
+ 	u32 key_size;
+ 	u32 value_size;
+ 	u32 max_entries;
+-	struct bpf_map_ops *ops;
++	u32 pages;		/* memory footprint, reported by the map impls */
++	const struct bpf_map_ops *ops;
+ 	struct work_struct work;
+ };
+ 
++/* How much of an element's value a *program* may see: for the per-CPU map
++ * types that is one CPU's slice of the map->value_size block, for every other
++ * type the whole value.  The per-CPU map implementations use this for the
++ * slice arithmetic of their map_lookup_elem()/map_update_elem(), and the
++ * verifier uses it to bound value accesses through a looked-up pointer and the
++ * stack buffer passed to BPF_FUNC_map_update_elem - a program can never put the
++ * whole per-CPU block (e.g. 10 CPUs * 256 B for time_in_state.o) on its
++ * 512-byte stack. */
++static inline u32 bpf_map_prog_value_size(const struct bpf_map *map)
++{
++	if (map->map_type == BPF_MAP_TYPE_PERCPU_HASH ||
++	    map->map_type == BPF_MAP_TYPE_PERCPU_ARRAY)
++		return map->value_size / num_possible_cpus();
++
++	return map->value_size;
++}
++
++/* Array of arbitrary sized elements, optionally an array of map/program fds
++ * (BPF_MAP_TYPE_PROG_ARRAY / PERF_EVENT_ARRAY / CGROUP_ARRAY). */
++struct bpf_array {
++	struct bpf_map map;
++	u32 elem_size;
++	enum bpf_prog_type owner_prog_type;
++	bool owner_jited;
++	union {
++		char value[0] __aligned(8);
++		void *ptrs[0] __aligned(8);
++		void __percpu *pptrs[0] __aligned(8);
++	};
++};
++
+ struct bpf_map_type_list {
+ 	struct list_head list_node;
+-	struct bpf_map_ops *ops;
++	const struct bpf_map_ops *ops;
+ 	enum bpf_map_type type;
+ };
+ 
+@@ -46,6 +99,25 @@ void bpf_register_map_type(struct bpf_map_type_list *tl);
+ void bpf_map_put(struct bpf_map *map);
+ struct bpf_map *bpf_map_get(struct fd f);
+ 
++/* Object pinning / bpffs support. */
++struct bpf_map *bpf_map_inc(struct bpf_map *map, bool uref);
++void bpf_map_put_with_uref(struct bpf_map *map);
++struct bpf_map *bpf_map_get_with_uref(u32 ufd);
++int bpf_map_new_fd(struct bpf_map *map);
++struct bpf_prog *bpf_prog_inc(struct bpf_prog *prog);
++int bpf_prog_new_fd(struct bpf_prog *prog);
++bool bpf_prog_array_compatible(struct bpf_array *array,
++			       const struct bpf_prog *fp);
++void bpf_prog_put_rcu(struct bpf_prog *prog);
++int bpf_obj_pin_user(u32 ufd, const char __user *pathname);
++int bpf_get_file_flag(int flags);
++int bpf_obj_get_user(const char __user *pathname, int flags);
++
++/* The pinned objects are handed out as ordinary bpf fds, so the bpf
++ * filesystem uses these very file_operations on its inodes. */
++extern const struct file_operations bpf_map_fops;
++extern const struct file_operations bpf_prog_fops;
++
+ /* function argument constraints */
+ enum bpf_arg_type {
+ 	ARG_DONTCARE = 0,	/* unused argument in helper function */
+@@ -64,6 +136,14 @@ enum bpf_arg_type {
+ 	ARG_CONST_STACK_SIZE,	/* number of bytes accessed from stack */
+ 
+ 	ARG_ANYTHING,		/* any (initialized) argument is ok */
++
++	/* The skb helper protos (from 4.4) type their skb argument with
++	 * ARG_PTR_TO_CTX. Appended last so existing values keep their ABI. */
++	ARG_PTR_TO_CTX,		/* reg points to bpf_context (PTR_TO_CTX) */
++	/* Output buffer on the stack: bounds-checked like ARG_PTR_TO_STACK
++	 * but the slots need not be initialized. bpf_skb_load_bytes() and
++	 * friends prototype their destination buffer with it. */
++	ARG_PTR_TO_UNINIT_MEM,
+ };
+ 
+ /* type of values returned from helper functions */
+@@ -88,6 +168,33 @@ struct bpf_func_proto {
+ 	enum bpf_arg_type arg5_type;
+ };
+ 
++/* Helper prototypes implemented in kernel/bpf/helpers.c, handed to the
++ * verifier by a program type's get_func_proto(). */
++extern const struct bpf_func_proto bpf_map_lookup_elem_proto;
++extern const struct bpf_func_proto bpf_map_update_elem_proto;
++extern const struct bpf_func_proto bpf_map_delete_elem_proto;
++extern const struct bpf_func_proto bpf_get_prandom_u32_proto;
++extern const struct bpf_func_proto bpf_get_smp_processor_id_proto;
++extern const struct bpf_func_proto bpf_ktime_get_ns_proto;
++extern const struct bpf_func_proto bpf_get_current_pid_tgid_proto;
++extern const struct bpf_func_proto bpf_get_current_uid_gid_proto;
++extern const struct bpf_func_proto bpf_get_current_comm_proto;
++/* skb, socket and clock helpers used by the tethering/netd programs. The
++ * skb ones are stubs: programs are verified and loaded but never run on this
++ * kernel. Proto shapes follow net/core/filter.c of 4.4/4.9. */
++extern const struct bpf_func_proto bpf_skb_store_bytes_proto;
++extern const struct bpf_func_proto bpf_l3_csum_replace_proto;
++extern const struct bpf_func_proto bpf_l4_csum_replace_proto;
++extern const struct bpf_func_proto bpf_redirect_proto;
++extern const struct bpf_func_proto bpf_skb_load_bytes_proto;
++extern const struct bpf_func_proto bpf_skb_change_proto_proto;
++extern const struct bpf_func_proto bpf_skb_pull_data_proto;
++extern const struct bpf_func_proto bpf_csum_update_proto;
++extern const struct bpf_func_proto bpf_skb_change_head_proto;
++extern const struct bpf_func_proto bpf_get_socket_cookie_proto;
++extern const struct bpf_func_proto bpf_get_socket_uid_proto;
++extern const struct bpf_func_proto bpf_ktime_get_boot_ns_proto;
++
+ /* bpf_context is intentionally undefined structure. Pointer to bpf_context is
+  * the first argument to eBPF programs.
+  * For socket filters: 'struct bpf_context *' == 'struct sk_buff *'
+@@ -111,7 +218,7 @@ struct bpf_verifier_ops {
+ 
+ struct bpf_prog_type_list {
+ 	struct list_head list_node;
+-	struct bpf_verifier_ops *ops;
++	const struct bpf_verifier_ops *ops;
+ 	enum bpf_prog_type type;
+ };
+ 
+@@ -123,7 +230,7 @@ struct bpf_prog_aux {
+ 	atomic_t refcnt;
+ 	bool is_gpl_compatible;
+ 	enum bpf_prog_type prog_type;
+-	struct bpf_verifier_ops *ops;
++	const struct bpf_verifier_ops *ops;
+ 	struct bpf_map **used_maps;
+ 	u32 used_map_cnt;
+ 	struct bpf_prog *prog;
+@@ -135,4 +242,14 @@ struct bpf_prog *bpf_prog_get(u32 ufd);
+ /* verify correctness of eBPF program */
+ int bpf_check(struct bpf_prog *fp, union bpf_attr *attr);
+ 
++struct cgroup;	/* kernel/bpf/cgroup_stub.c, no include cycle this way */
++
++/* Minimal BPF_PROG_ATTACH/DETACH plumbing. Attached programs are stored on
++ * the cgroup and never executed (no packet-path hooks on 3.18). */
++struct cgroup *bpf_cgroup_from_fd(int fd);
++void bpf_cgroup_from_fd_put(struct cgroup *cgrp);
++int bpf_cgroup_attach_stub(struct cgroup *cgrp, struct bpf_prog *prog,
++			   u32 type, u32 flags);
++int bpf_cgroup_detach_stub(struct cgroup *cgrp, u32 type);
++
+ #endif /* _LINUX_BPF_H */
+diff --git a/kernel-3.18/include/linux/cgroup.h b/kernel-3.18/include/linux/cgroup.h
+index 1d5196889..4c290d3f9 100644
+--- a/kernel-3.18/include/linux/cgroup.h
++++ b/kernel-3.18/include/linux/cgroup.h
+@@ -22,12 +22,14 @@
+ #include <linux/seq_file.h>
+ #include <linux/kernfs.h>
+ #include <linux/wait.h>
++#include <uapi/linux/bpf.h>
+ 
+ #ifdef CONFIG_CGROUPS
+ 
+ struct cgroup_root;
+ struct cgroup_subsys;
+ struct cgroup;
++struct bpf_prog;
+ 
+ extern int cgroup_init_early(void);
+ extern int cgroup_init(void);
+@@ -236,6 +238,15 @@ struct cgroup {
+ 	struct list_head pidlists;
+ 	struct mutex pidlist_mutex;
+ 
++	/* eBPF stub: programs attached through
++	 * BPF_PROG_ATTACH are stored here, one slot per attach type, and
++	 * never executed - this 3.18 kernel has no cgroup-bpf run path (no
++	 * packet-path hooks, no effective-prog computation).  Non-root
++	 * cgroups come from kzalloc in cgroup_mkdir(), so the slots start
++	 * NULL without an init hook; kernel/cgroup.c drops the stored
++	 * references through cgroup_bpf_stub_release() before freeing. */
++	struct bpf_prog *bpf_stub_progs[__MAX_BPF_ATTACH_TYPE];
++
+ 	/* used to wait for offlining of csses */
+ 	wait_queue_head_t offline_waitq;
+ 
+@@ -243,6 +254,10 @@ struct cgroup {
+ 	struct work_struct release_agent_work;
+ };
+ 
++/* Drop the BPF_PROG_ATTACH references stored on @cgrp (defined in
++ * kernel/bpf/cgroup_stub.c, called from kernel/cgroup.c destroy paths). */
++extern void cgroup_bpf_stub_release(struct cgroup *cgrp);
++
+ #define MAX_CGROUP_ROOT_NAMELEN 64
+ 
+ /* cgroup_root->flags */
+diff --git a/kernel-3.18/include/uapi/linux/bpf.h b/kernel-3.18/include/uapi/linux/bpf.h
+index d18316f9e..c00343edc 100644
+--- a/kernel-3.18/include/uapi/linux/bpf.h
++++ b/kernel-3.18/include/uapi/linux/bpf.h
+@@ -107,22 +107,144 @@ enum bpf_cmd {
+ 	 * returns fd or negative error
+ 	 */
+ 	BPF_PROG_LOAD,
++
++	/* pin an eBPF object to a file in the bpf filesystem
++	 * err = bpf(BPF_OBJ_PIN, union bpf_attr *attr, u32 size)
++	 * Using attr->pathname, attr->bpf_fd, attr->file_flags
++	 * returns zero or negative error
++	 */
++	BPF_OBJ_PIN,
++
++	/* get an fd for an object pinned in the bpf filesystem
++	 * fd = bpf(BPF_OBJ_GET, union bpf_attr *attr, u32 size)
++	 * Using attr->pathname, attr->file_flags
++	 * returns fd or negative error
++	 */
++	BPF_OBJ_GET,
++
++	/* attach/detach an eBPF program to/from a cgroup
++	 * err = bpf(BPF_PROG_ATTACH, union bpf_attr *attr, u32 size)
++	 * Using attr->target_fd, attr->attach_bpf_fd, attr->attach_type
++	 * returns zero or negative error
++	 */
++	BPF_PROG_ATTACH,
++	BPF_PROG_DETACH,
+ };
+ 
++/* Values are ABI: Android userspace (bpfloader, netd, libgpuwork) puts them
++ * into struct bpf_map_def. Unimplemented types are declared only so that the
++ * numbers line up and they fail loudly instead of creating a wrong map. */
+ enum bpf_map_type {
+ 	BPF_MAP_TYPE_UNSPEC,
++	BPF_MAP_TYPE_HASH,
++	BPF_MAP_TYPE_ARRAY,
++	BPF_MAP_TYPE_PROG_ARRAY,
++	BPF_MAP_TYPE_PERF_EVENT_ARRAY,
++	BPF_MAP_TYPE_PERCPU_HASH,
++	BPF_MAP_TYPE_PERCPU_ARRAY,
++	BPF_MAP_TYPE_STACK_TRACE,
++	BPF_MAP_TYPE_CGROUP_ARRAY,
++	BPF_MAP_TYPE_LRU_HASH,
++	BPF_MAP_TYPE_LRU_PERCPU_HASH,
++	BPF_MAP_TYPE_LPM_TRIE,
++	BPF_MAP_TYPE_ARRAY_OF_MAPS,
++	BPF_MAP_TYPE_HASH_OF_MAPS,
++	BPF_MAP_TYPE_DEVMAP,
++	BPF_MAP_TYPE_SOCKMAP,
++	BPF_MAP_TYPE_CPUMAP,
++	BPF_MAP_TYPE_XSKMAP,
++	BPF_MAP_TYPE_SOCKHASH,
++	BPF_MAP_TYPE_CGROUP_STORAGE,
++	BPF_MAP_TYPE_REUSEPORT_SOCKARRAY,
++	BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE,
++	BPF_MAP_TYPE_QUEUE,
++	BPF_MAP_TYPE_STACK,
++	BPF_MAP_TYPE_SK_STORAGE,	/* 24, ABI placeholder: not implemented */
++	BPF_MAP_TYPE_DEVMAP_HASH,	/* 25, used by the tethering offload
++					 * program; no devmap data path on
++					 * 3.18, so a HASH alias stub */
+ };
+ 
++/* Same ABI rule as above: TRACEPOINT(5) is what the /system/etc/bpf programs
++ * (gpu_work, gpu_mem, time_in_state) are compiled as, CGROUP_SKB(8) is what
++ * netd pins. */
+ enum bpf_prog_type {
+ 	BPF_PROG_TYPE_UNSPEC,
++	BPF_PROG_TYPE_SOCKET_FILTER,
++	BPF_PROG_TYPE_KPROBE,
++	BPF_PROG_TYPE_SCHED_CLS,
++	BPF_PROG_TYPE_SCHED_ACT,
++	BPF_PROG_TYPE_TRACEPOINT,
++	BPF_PROG_TYPE_XDP,
++	BPF_PROG_TYPE_PERF_EVENT,
++	BPF_PROG_TYPE_CGROUP_SKB,
++	BPF_PROG_TYPE_CGROUP_SOCK,
++	BPF_PROG_TYPE_LWT_IN,
++	BPF_PROG_TYPE_LWT_OUT,
++	BPF_PROG_TYPE_LWT_XMIT,
++	BPF_PROG_TYPE_SOCK_OPS,
++	BPF_PROG_TYPE_SK_SKB,
++	BPF_PROG_TYPE_CGROUP_DEVICE,
++	BPF_PROG_TYPE_SK_MSG,
++	BPF_PROG_TYPE_RAW_TRACEPOINT,
++	BPF_PROG_TYPE_CGROUP_SOCK_ADDR,
++	BPF_PROG_TYPE_LWT_SEG6LOCAL,
++	BPF_PROG_TYPE_LIRC_MODE2,
++	BPF_PROG_TYPE_SK_REUSEPORT,
++	BPF_PROG_TYPE_FLOW_DISSECTOR,
+ };
+ 
++enum bpf_attach_type {
++	BPF_CGROUP_INET_INGRESS,
++	BPF_CGROUP_INET_EGRESS,
++	BPF_CGROUP_INET_SOCK_CREATE,
++	BPF_CGROUP_SOCK_OPS,
++	BPF_SK_SKB_STREAM_PARSER,
++	BPF_SK_SKB_STREAM_VERDICT,
++	BPF_CGROUP_DEVICE,
++	BPF_SK_MSG_VERDICT,
++	BPF_CGROUP_INET4_BIND,
++	BPF_CGROUP_INET6_BIND,
++	BPF_CGROUP_INET4_CONNECT,
++	BPF_CGROUP_INET6_CONNECT,
++	BPF_CGROUP_INET4_POST_BIND,
++	BPF_CGROUP_INET6_POST_BIND,
++	__MAX_BPF_ATTACH_TYPE
++};
++
++#define BPF_OBJ_NAME_LEN 16U
++
++/* flags for BPF_MAP_UPDATE_ELEM command */
++#define BPF_ANY		0 /* create new element or update existing */
++#define BPF_NOEXIST	1 /* create new element if it didn't exist */
++#define BPF_EXIST	2 /* update existing element */
++
++/* flags for BPF_PROG_ATTACH command (subset of upstream; the run path that
++ * would need ALLOW_MULTI lists does not exist on this kernel) */
++#define BPF_F_ALLOW_OVERRIDE	(1U << 0)
++#define BPF_F_ALLOW_MULTI	(1U << 1)
++/* file_flags for BPF_OBJ_GET (and map creation): without these every get
++ * demands MAY_WRITE, which breaks non-root readers of 0440 pinned objects
++ * (e.g. gpuservice opening root:graphics programs).  Values match upstream. */
++#define BPF_F_RDONLY		(1U << 3)
++#define BPF_F_WRONLY		(1U << 4)
++
+ union bpf_attr {
+ 	struct { /* anonymous struct used by BPF_MAP_CREATE command */
+ 		__u32	map_type;	/* one of enum bpf_map_type */
+ 		__u32	key_size;	/* size of key in bytes */
+ 		__u32	value_size;	/* size of value in bytes */
+ 		__u32	max_entries;	/* max number of entries in a map */
++		__u32	map_flags;	/* BPF_MAP_CREATE related flags */
++		__u32	inner_map_fd;	/* fd pointing to the inner map */
++		__u32	numa_node;	/* numa node (effective only if
++					 * BPF_F_NUMA_NODE is set).
++					 */
++		char	map_name[BPF_OBJ_NAME_LEN];
++		__u32	map_ifindex;	/* ifindex of netdev to create on */
++		__u32	btf_fd;		/* fd pointing to a BTF type data */
++		__u32	btf_key_type_id;
++		__u32	btf_value_type_id;
+ 	};
+ 
+ 	struct { /* anonymous struct used by BPF_MAP_*_ELEM commands */
+@@ -132,6 +254,7 @@ union bpf_attr {
+ 			__aligned_u64 value;
+ 			__aligned_u64 next_key;
+ 		};
++		__u64		flags;
+ 	};
+ 
+ 	struct { /* anonymous struct used by BPF_PROG_LOAD command */
+@@ -142,14 +265,126 @@ union bpf_attr {
+ 		__u32		log_level;	/* verbosity level of verifier */
+ 		__u32		log_size;	/* size of user buffer */
+ 		__aligned_u64	log_buf;	/* user supplied buffer */
++		__u32		kern_version;	/* checked when prog_type=kprobe */
++		__u32		prog_flags;
++		char		prog_name[BPF_OBJ_NAME_LEN];
++		__u32		prog_ifindex;	/* ifindex of netdev to prep for */
++		__u32		expected_attach_type; /* for some prog types */
++	};
++
++	struct { /* anonymous struct used by BPF_OBJ_* commands */
++		__aligned_u64	pathname;
++		__u32		bpf_fd;
++		__u32		file_flags;
++	};
++
++	struct { /* anonymous struct used by BPF_PROG_ATTACH/DETACH commands */
++		__u32		target_fd;	/* container object to attach to */
++		__u32		attach_bpf_fd;	/* eBPF program to attach */
++		__u32		attach_type;
++		__u32		attach_flags;
+ 	};
+ } __attribute__((aligned(8)));
+ 
+ /* integer value in 'imm' field of BPF_CALL instruction selects which helper
+  * function eBPF program intends to call
+  */
++/* Helper ids are ABI: Android userspace compiles them into BPF_CALL
++ * immediates (the /system/etc/bpf and tethering programs use ids
++ * 1,2,3,5,6,8,9,10,11,14,15,23,26,31,39,40,43,46,47 and 125). */
+ enum bpf_func_id {
+ 	BPF_FUNC_unspec,
++	BPF_FUNC_map_lookup_elem,
++	BPF_FUNC_map_update_elem,
++	BPF_FUNC_map_delete_elem,
++	BPF_FUNC_probe_read,
++	BPF_FUNC_ktime_get_ns,
++	BPF_FUNC_trace_printk,
++	BPF_FUNC_get_prandom_u32,
++	BPF_FUNC_get_smp_processor_id,
++	BPF_FUNC_skb_store_bytes,
++	BPF_FUNC_l3_csum_replace,
++	BPF_FUNC_l4_csum_replace,
++	BPF_FUNC_tail_call,
++	BPF_FUNC_clone_redirect,
++	BPF_FUNC_get_current_pid_tgid,
++	BPF_FUNC_get_current_uid_gid,
++	BPF_FUNC_get_current_comm,
++	BPF_FUNC_get_cgroup_classid,
++	BPF_FUNC_skb_vlan_push,
++	BPF_FUNC_skb_vlan_pop,
++	BPF_FUNC_skb_get_tunnel_key,
++	BPF_FUNC_skb_set_tunnel_key,
++	BPF_FUNC_perf_event_read,
++	BPF_FUNC_redirect,
++	BPF_FUNC_get_route_realm,
++	BPF_FUNC_perf_event_output,
++	BPF_FUNC_skb_load_bytes,
++	BPF_FUNC_get_stackid,
++	BPF_FUNC_csum_diff,
++	BPF_FUNC_skb_get_tunnel_opt,
++	BPF_FUNC_skb_set_tunnel_opt,
++	BPF_FUNC_skb_change_proto,
++	BPF_FUNC_skb_change_type,
++	BPF_FUNC_skb_under_cgroup,
++	BPF_FUNC_get_hash_recalc,
++	BPF_FUNC_get_current_task,
++	BPF_FUNC_probe_write_user,
++	BPF_FUNC_current_task_under_cgroup,
++	BPF_FUNC_skb_change_tail,
++	BPF_FUNC_skb_pull_data,
++	BPF_FUNC_csum_update,
++	BPF_FUNC_set_hash_invalid,
++	BPF_FUNC_get_numa_node_id,
++	BPF_FUNC_skb_change_head,
++	BPF_FUNC_xdp_adjust_head,
++	BPF_FUNC_probe_read_str,
++	BPF_FUNC_get_socket_cookie,
++	BPF_FUNC_get_socket_uid,
++	BPF_FUNC_set_hash,
++	BPF_FUNC_setsockopt,
++	BPF_FUNC_skb_adjust_room,
++	BPF_FUNC_redirect_map,
++	BPF_FUNC_sk_redirect_map,
++	BPF_FUNC_sock_map_update,
++	BPF_FUNC_xdp_adjust_meta,
++	BPF_FUNC_perf_event_read_value,
++	BPF_FUNC_perf_prog_read_value,
++	BPF_FUNC_getsockopt,
++	BPF_FUNC_override_return,
++	BPF_FUNC_sock_ops_cb_flags_set,
++	BPF_FUNC_msg_redirect_map,
++	BPF_FUNC_msg_apply_bytes,
++	BPF_FUNC_msg_cork_bytes,
++	BPF_FUNC_msg_pull_data,
++	BPF_FUNC_bind,
++	BPF_FUNC_xdp_adjust_tail,
++	BPF_FUNC_skb_get_xfrm_state,
++	BPF_FUNC_get_stack,
++	BPF_FUNC_skb_load_bytes_relative,
++	BPF_FUNC_fib_lookup,
++	BPF_FUNC_sock_hash_update,
++	BPF_FUNC_msg_redirect_hash,
++	BPF_FUNC_sk_redirect_hash,
++	BPF_FUNC_lwt_push_encap,
++	BPF_FUNC_lwt_seg6_store_bytes,
++	BPF_FUNC_lwt_seg6_adjust_srh,
++	BPF_FUNC_lwt_seg6_action,
++	BPF_FUNC_rc_repeat,
++	BPF_FUNC_rc_keydown,
++	BPF_FUNC_skb_cgroup_id,
++	BPF_FUNC_get_current_cgroup_id,
++	BPF_FUNC_get_local_storage,
++	BPF_FUNC_sk_select_reuseport,
++	BPF_FUNC_skb_ancestor_cgroup_id,
++	BPF_FUNC_sk_lookup_tcp,
++	BPF_FUNC_sk_lookup_udp,
++	BPF_FUNC_sk_release,
++	BPF_FUNC_map_push_elem,
++	BPF_FUNC_map_pop_elem,
++	BPF_FUNC_map_peek_elem,
++	BPF_FUNC_ktime_get_boot_ns = 125,	/* tethering offload.o calls it;
++						 * upstream __BPF_FUNC_MAPPER id */
+ 	__BPF_FUNC_MAX_ID,
+ };
+ 
+diff --git a/kernel-3.18/include/uapi/linux/magic.h b/kernel-3.18/include/uapi/linux/magic.h
+index fc8c9a4d1..a382b08f6 100644
+--- a/kernel-3.18/include/uapi/linux/magic.h
++++ b/kernel-3.18/include/uapi/linux/magic.h
+@@ -17,6 +17,8 @@
+ #define HUGETLBFS_MAGIC 	0x958458f6	/* some random number */
+ #define SQUASHFS_MAGIC		0x73717368
+ #define ECRYPTFS_SUPER_MAGIC	0xf15f
++/* sdcardfs, value from AOSP include/uapi/linux/magic.h */
++#define SDCARDFS_SUPER_MAGIC	0x5dca2df5
+ #define EFS_SUPER_MAGIC		0x414A53
+ #define EXT2_SUPER_MAGIC	0xEF53
+ #define EXT3_SUPER_MAGIC	0xEF53
+@@ -77,4 +79,8 @@
+ #define ANON_INODE_FS_MAGIC	0x09041934
+ #define BTRFS_TEST_MAGIC	0x73727279
+ 
++/* bpf filesystem. ABI: Android userspace statfs()es /sys/fs/bpf and
++ * requires exactly this magic. */
++#define BPF_FS_MAGIC		0xcafe4a11
++
+ #endif /* __LINUX_MAGIC_H__ */
+diff --git a/kernel-3.18/kernel/bpf/Makefile b/kernel-3.18/kernel/bpf/Makefile
+index 0daf7f6ae..8c0923f11 100644
+--- a/kernel-3.18/kernel/bpf/Makefile
++++ b/kernel-3.18/kernel/bpf/Makefile
+@@ -1,5 +1,5 @@
+ obj-y := core.o
+-obj-$(CONFIG_BPF_SYSCALL) += syscall.o verifier.o
++obj-$(CONFIG_BPF_SYSCALL) += syscall.o verifier.o inode.o arraymap.o hashtab.o helpers.o progtypes.o cgroup_stub.o
+ ifdef CONFIG_TEST_BPF
+ obj-$(CONFIG_BPF_SYSCALL) += test_stub.o
+ endif
+diff --git a/kernel-3.18/kernel/bpf/arraymap.c b/kernel-3.18/kernel/bpf/arraymap.c
+new file mode 100644
+index 000000000..1ba13a68f
+--- /dev/null
++++ b/kernel-3.18/kernel/bpf/arraymap.c
+@@ -0,0 +1,436 @@
++/* Copyright (c) 2011-2014 PLUMgrid, http://plumgrid.com
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of version 2 of the GNU General Public
++ * License as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
++ * General Public License for more details.
++ */
++#include <linux/bpf.h>
++#include <linux/err.h>
++#include <linux/vmalloc.h>
++#include <linux/slab.h>
++#include <linux/mm.h>
++#include <linux/filter.h>
++#include <linux/smp.h>
++
++/* Called from syscall */
++static struct bpf_map *array_map_alloc(union bpf_attr *attr)
++{
++	struct bpf_array *array;
++	u32 elem_size, array_size;
++
++	/* check sanity of attributes */
++	if (attr->max_entries == 0 || attr->key_size != 4 ||
++	    attr->value_size == 0)
++		return ERR_PTR(-EINVAL);
++
++	if (attr->value_size >= 1 << (KMALLOC_SHIFT_MAX - 1))
++		/* if value_size is bigger, the user space won't be able to
++		 * access the elements.
++		 */
++		return ERR_PTR(-E2BIG);
++
++	elem_size = round_up(attr->value_size, 8);
++
++	/* check round_up into zero and u32 overflow */
++	if (elem_size == 0 ||
++	    attr->max_entries > (U32_MAX - PAGE_SIZE - sizeof(*array)) / elem_size)
++		return ERR_PTR(-ENOMEM);
++
++	array_size = sizeof(*array) + attr->max_entries * elem_size;
++
++	/* allocate all map elements and zero-initialize them */
++	array = kzalloc(array_size, GFP_USER | __GFP_NOWARN);
++	if (!array) {
++		array = vzalloc(array_size);
++		if (!array)
++			return ERR_PTR(-ENOMEM);
++	}
++
++	/* copy mandatory map attributes */
++	array->map.key_size = attr->key_size;
++	array->map.value_size = attr->value_size;
++	array->map.max_entries = attr->max_entries;
++	array->map.pages = round_up(array_size, PAGE_SIZE) >> PAGE_SHIFT;
++	array->elem_size = elem_size;
++
++	return &array->map;
++}
++
++/* Called from syscall or from eBPF program */
++static void *array_map_lookup_elem(struct bpf_map *map, void *key)
++{
++	struct bpf_array *array = container_of(map, struct bpf_array, map);
++	u32 index = *(u32 *)key;
++
++	if (index >= array->map.max_entries)
++		return NULL;
++
++	return array->value + array->elem_size * index;
++}
++
++/* Called from syscall */
++static int array_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
++{
++	struct bpf_array *array = container_of(map, struct bpf_array, map);
++	u32 index = *(u32 *)key;
++	u32 *next = (u32 *)next_key;
++
++	if (index >= array->map.max_entries) {
++		*next = 0;
++		return 0;
++	}
++
++	if (index == array->map.max_entries - 1)
++		return -ENOENT;
++
++	*next = index + 1;
++	return 0;
++}
++
++/* Called from syscall or from eBPF program */
++static int array_map_update_elem(struct bpf_map *map, void *key, void *value,
++				 u64 map_flags)
++{
++	struct bpf_array *array = container_of(map, struct bpf_array, map);
++	u32 index = *(u32 *)key;
++
++	if (map_flags > BPF_EXIST)
++		/* unknown flags */
++		return -EINVAL;
++
++	if (index >= array->map.max_entries)
++		/* all elements were pre-allocated, cannot insert a new one */
++		return -E2BIG;
++
++	if (map_flags == BPF_NOEXIST)
++		/* all elements already exist */
++		return -EEXIST;
++
++	memcpy(array->value + array->elem_size * index, value, map->value_size);
++	return 0;
++}
++
++/* Called from syscall or from eBPF program */
++static int array_map_delete_elem(struct bpf_map *map, void *key)
++{
++	return -EINVAL;
++}
++
++/* Called when map->refcnt goes to zero, either from workqueue or from syscall */
++static void array_map_free(struct bpf_map *map)
++{
++	struct bpf_array *array = container_of(map, struct bpf_array, map);
++
++	/* at this point bpf_prog->aux->refcnt == 0 and this map->refcnt == 0,
++	 * so the programs (can be more than one that used this map) were
++	 * disconnected from events. Wait for outstanding programs to complete
++	 * and free the array
++	 */
++	synchronize_rcu();
++
++	kvfree(array);
++}
++
++static const struct bpf_map_ops array_ops = {
++	.map_alloc = array_map_alloc,
++	.map_free = array_map_free,
++	.map_get_next_key = array_map_get_next_key,
++	.map_lookup_elem = array_map_lookup_elem,
++	.map_update_elem = array_map_update_elem,
++	.map_delete_elem = array_map_delete_elem,
++};
++
++static struct bpf_map_type_list array_type __read_mostly = {
++	.ops = &array_ops,
++	.type = BPF_MAP_TYPE_ARRAY,
++};
++
++static int __init register_array_map(void)
++{
++	bpf_register_map_type(&array_type);
++	return 0;
++}
++late_initcall(register_array_map);
++
++/* BPF_MAP_TYPE_PERCPU_ARRAY, declared by time_in_state.o together with
++ * PERCPU_HASH; bpfloader aborts the whole directory on an unknown map type.
++ *
++ * Layout: instead of the per-CPU allocations upstream uses, a per-CPU map is
++ * the ordinary map with map->value_size scaled to
++ * attr->value_size * num_possible_cpus(): the value of one element is the block
++ * of every CPU's value packed by CPU index.  The syscall layer copies
++ * map->value_size bytes for both lookup and update, so userspace keeps exactly
++ * the upstream ABI (BPF_MAP_LOOKUP_ELEM fills value_size * num_possible_cpus()
++ * bytes, BPF_MAP_UPDATE_ELEM consumes the same).  A program must only see the
++ * current CPU's slice of that block, so for these map types
++ * .map_lookup_elem/.map_update_elem are the program-facing slice variants and
++ * the whole-block ones are registered as
++ * .map_lookup_elem_sys_only/.map_update_elem_sys_only.
++ *
++ * The per-CPU values used by time_in_state.o (256, 128 and 8 bytes) are
++ * multiples of 8, so this packing matches upstream's round_up(value_size, 8)
++ * stride.
++ *
++ * The slice arithmetic uses raw_smp_processor_id(): these hooks only ever run
++ * from eBPF program context (under rcu_read_lock), which is preemptible in this
++ * kernel (CONFIG_PREEMPT_RCU + CONFIG_DEBUG_PREEMPT=y), and plain
++ * smp_processor_id() would print "BUG: using smp_processor_id() in preemptible
++ * code" plus a stack dump on every map access.  kernel/bpf/helpers.c uses the
++ * raw variant for bpf_get_smp_processor_id() for the same reason.
++ */
++static struct bpf_map *percpu_array_map_alloc(union bpf_attr *attr)
++{
++	/* Per-CPU maps are disabled for now (slab corruption seen with
++	 * them enabled); the implementation is kept below under #if 0. */
++	(void) attr;
++	return ERR_PTR(-EOPNOTSUPP);
++}
++#if 0 /* disabled per-CPU implementation */
++
++	union bpf_attr scaled = *attr;
++	u64 value_size;
++
++	value_size = (u64) attr->value_size * num_possible_cpus();
++	if (value_size > U32_MAX)
++		return ERR_PTR(-E2BIG);
++
++	scaled.value_size = (u32) value_size;
++
++	/* array_map_alloc() validates the scaled value_size (zero size, the
++	 * "too big for userspace to read back" limit, overflow of the element
++	 * size) and allocates the elements */
++	return array_map_alloc(&scaled);
++#endif
++
++/* Called from eBPF program: the value of the current CPU only */
++static void *percpu_array_map_lookup_elem(struct bpf_map *map, void *key)
++{
++	void *value = array_map_lookup_elem(map, key);
++
++	if (!value)
++		return NULL;
++
++	return value + raw_smp_processor_id() * bpf_map_prog_value_size(map);
++}
++
++/* Called from eBPF program: touches the current CPU's slice only, like the
++ * this_cpu_ptr() store upstream does for per-CPU arrays.  The syscall path
++ * writes the whole block through array_map_update_elem(). */
++static int percpu_array_map_update_elem(struct bpf_map *map, void *key,
++					void *value, u64 map_flags)
++{
++	struct bpf_array *array = container_of(map, struct bpf_array, map);
++	u32 index, value_size;
++
++	index = *(u32 *)key;
++	value_size = bpf_map_prog_value_size(map);
++
++	if (map_flags > BPF_EXIST)
++		/* unknown flags */
++		return -EINVAL;
++
++	if (index >= array->map.max_entries)
++		/* all elements were pre-allocated, cannot insert a new one */
++		return -E2BIG;
++
++	if (map_flags == BPF_NOEXIST)
++		/* all elements already exist */
++		return -EEXIST;
++
++	memcpy(array->value + array->elem_size * index +
++	       raw_smp_processor_id() * value_size, value, value_size);
++	return 0;
++}
++
++static const struct bpf_map_ops percpu_array_ops = {
++	.map_alloc = percpu_array_map_alloc,
++	.map_free = array_map_free,
++	.map_get_next_key = array_map_get_next_key,
++	.map_lookup_elem = percpu_array_map_lookup_elem,
++	.map_lookup_elem_sys_only = array_map_lookup_elem,
++	.map_update_elem = percpu_array_map_update_elem,
++	.map_update_elem_sys_only = array_map_update_elem,
++	.map_delete_elem = array_map_delete_elem,
++};
++
++static struct bpf_map_type_list percpu_array_type __read_mostly = {
++	.ops = &percpu_array_ops,
++	.type = BPF_MAP_TYPE_PERCPU_ARRAY,
++};
++
++static int __init register_percpu_array_map(void)
++{
++	bpf_register_map_type(&percpu_array_type);
++	return 0;
++}
++late_initcall(register_percpu_array_map);
++
++static struct bpf_map *fd_array_map_alloc(union bpf_attr *attr)
++{
++	/* only file descriptors can be stored in this type of map */
++	if (attr->value_size != sizeof(u32))
++		return ERR_PTR(-EINVAL);
++	return array_map_alloc(attr);
++}
++
++static void fd_array_map_free(struct bpf_map *map)
++{
++	struct bpf_array *array = container_of(map, struct bpf_array, map);
++	int i;
++
++	synchronize_rcu();
++
++	/* make sure it's empty */
++	for (i = 0; i < array->map.max_entries; i++)
++		BUG_ON(array->ptrs[i] != NULL);
++	kvfree(array);
++}
++
++static void *fd_array_map_lookup_elem(struct bpf_map *map, void *key)
++{
++	return NULL;
++}
++
++/* only called from syscall */
++static int fd_array_map_update_elem(struct bpf_map *map, void *key,
++				    void *value, u64 map_flags)
++{
++	struct bpf_array *array = container_of(map, struct bpf_array, map);
++	void *new_ptr, *old_ptr;
++	u32 index = *(u32 *)key, ufd;
++
++	if (map_flags != BPF_ANY)
++		return -EINVAL;
++
++	if (index >= array->map.max_entries)
++		return -E2BIG;
++
++	ufd = *(u32 *)value;
++	new_ptr = map->ops->map_fd_get_ptr(map, ufd);
++	if (IS_ERR(new_ptr))
++		return PTR_ERR(new_ptr);
++
++	old_ptr = xchg(array->ptrs + index, new_ptr);
++	if (old_ptr)
++		map->ops->map_fd_put_ptr(old_ptr);
++
++	return 0;
++}
++
++static int fd_array_map_delete_elem(struct bpf_map *map, void *key)
++{
++	struct bpf_array *array = container_of(map, struct bpf_array, map);
++	void *old_ptr;
++	u32 index = *(u32 *)key;
++
++	if (index >= array->map.max_entries)
++		return -E2BIG;
++
++	old_ptr = xchg(array->ptrs + index, NULL);
++	if (old_ptr) {
++		map->ops->map_fd_put_ptr(old_ptr);
++		return 0;
++	} else {
++		return -ENOENT;
++	}
++}
++
++static void *prog_fd_array_get_ptr(struct bpf_map *map, int fd)
++{
++	struct bpf_array *array = container_of(map, struct bpf_array, map);
++	struct bpf_prog *prog = bpf_prog_get(fd);
++	if (IS_ERR(prog))
++		return prog;
++
++	if (!bpf_prog_array_compatible(array, prog)) {
++		bpf_prog_put(prog);
++		return ERR_PTR(-EINVAL);
++	}
++	return prog;
++}
++
++static void prog_fd_array_put_ptr(void *ptr)
++{
++	struct bpf_prog *prog = ptr;
++
++	bpf_prog_put_rcu(prog);
++}
++
++/* decrement refcnt of all bpf_progs that are stored in this map */
++void bpf_fd_array_map_clear(struct bpf_map *map)
++{
++	struct bpf_array *array = container_of(map, struct bpf_array, map);
++	int i;
++
++	for (i = 0; i < array->map.max_entries; i++)
++		fd_array_map_delete_elem(map, &i);
++}
++
++static const struct bpf_map_ops prog_array_ops = {
++	.map_alloc = fd_array_map_alloc,
++	.map_free = fd_array_map_free,
++	.map_get_next_key = array_map_get_next_key,
++	.map_lookup_elem = fd_array_map_lookup_elem,
++	.map_update_elem = fd_array_map_update_elem,
++	.map_delete_elem = fd_array_map_delete_elem,
++	.map_fd_get_ptr = prog_fd_array_get_ptr,
++	.map_fd_put_ptr = prog_fd_array_put_ptr,
++};
++
++static struct bpf_map_type_list prog_array_type __read_mostly = {
++	.ops = &prog_array_ops,
++	.type = BPF_MAP_TYPE_PROG_ARRAY,
++};
++
++static int __init register_prog_array_map(void)
++{
++	bpf_register_map_type(&prog_array_type);
++	return 0;
++}
++late_initcall(register_prog_array_map);
++
++static void perf_event_array_map_free(struct bpf_map *map)
++{
++	fd_array_map_free(map);
++}
++
++/* 3.18 has neither perf_event_get()/perf_event_attrs() nor the
++ * PERF_COUNT_SW_BPF_OUTPUT software event that 4.4 validates here, so the
++ * lookup path is stubbed out: the map can be created (which is all the Android
++ * bpfloader needs) but storing an event fd in it fails. */
++static void *perf_event_fd_array_get_ptr(struct bpf_map *map, int fd)
++{
++	return ERR_PTR(-EINVAL);
++}
++
++static void perf_event_fd_array_put_ptr(void *ptr)
++{
++}
++
++static const struct bpf_map_ops perf_event_array_ops = {
++	.map_alloc = fd_array_map_alloc,
++	.map_free = perf_event_array_map_free,
++	.map_get_next_key = array_map_get_next_key,
++	.map_lookup_elem = fd_array_map_lookup_elem,
++	.map_update_elem = fd_array_map_update_elem,
++	.map_delete_elem = fd_array_map_delete_elem,
++	.map_fd_get_ptr = perf_event_fd_array_get_ptr,
++	.map_fd_put_ptr = perf_event_fd_array_put_ptr,
++};
++
++static struct bpf_map_type_list perf_event_array_type __read_mostly = {
++	.ops = &perf_event_array_ops,
++	.type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
++};
++
++static int __init register_perf_event_array_map(void)
++{
++	bpf_register_map_type(&perf_event_array_type);
++	return 0;
++}
++late_initcall(register_perf_event_array_map);
+diff --git a/kernel-3.18/kernel/bpf/cgroup_stub.c b/kernel-3.18/kernel/bpf/cgroup_stub.c
+new file mode 100644
+index 000000000..19ace577b
+--- /dev/null
++++ b/kernel-3.18/kernel/bpf/cgroup_stub.c
+@@ -0,0 +1,131 @@
++/*
++ * Minimal BPF_PROG_ATTACH/BPF_PROG_DETACH plumbing.
++ *
++ * netd attaches its cgroup programs to its cgroup directory at startup and
++ * fails when the attach syscall is missing. Resolve the target fd to a
++ * cgroup (only cgroup directory fds are supported) and store/clear the
++ * program in the cgroup's bpf_stub_progs[] slot.
++ *
++ * There is no run path: no packet-path hooks, no effective-program
++ * computation and no multi-program lists on 3.18 (modelled on 4.9
++ * kernel/bpf/cgroup.c). Attached programs are never executed, so
++ * BPF_F_ALLOW_MULTI is a simple replace and other attach flags are ignored.
++ */
++
++#include <linux/bpf.h>
++#include <linux/cgroup.h>
++#include <linux/err.h>
++#include <linux/errno.h>
++#include <linux/file.h>
++#include <linux/spinlock.h>
++
++/* Serializes attach vs detach vs destroy-path release.  Programs are only
++ * ever swapped under this lock; the old reference is dropped after unlock
++ * (bpf_prog_put() may sleep).  There are no run-path readers. */
++static DEFINE_SPINLOCK(cgroup_bpf_stub_lock);
++
++/* Resolve a cgroup-directory fd to its cgroup, holding a css reference.
++ * Returns ERR_PTR(-EBADF) for a bad fd or -ENOENT for a dying cgroup.
++ *
++ * netd passes the cgroup v2 root, which 3.18 cannot mount, so the fd may
++ * refer to a plain directory; fall back to the default hierarchy's root
++ * cgroup. The program is stored and reference-counted as for a real
++ * attach. */
++struct cgroup *bpf_cgroup_from_fd(int fd)
++{
++	struct fd f = fdget(fd);
++	struct cgroup_subsys_state *css;
++	struct cgroup *cgrp;
++
++	if (!f.file)
++		return ERR_PTR(-EBADF);
++
++	/* NULL subsystem yields the cgroup's own css (&cgrp->self) with a
++	 * reference held, which pins the cgroup for the attach/detach below. */
++	css = css_tryget_online_from_dir(f.file->f_path.dentry, NULL);
++	fdput(f);
++	if (!IS_ERR(css)) {
++		cgrp = css->cgroup;
++		return cgrp;
++	}
++	if (PTR_ERR(css) != -EBADF)
++		return ERR_CAST(css);
++
++	cgrp = &cgrp_dfl_root.cgrp;
++	if (!css_tryget_online(&cgrp->self))
++		return ERR_PTR(-ENOENT);
++	return cgrp;
++}
++
++void bpf_cgroup_from_fd_put(struct cgroup *cgrp)
++{
++	css_put(&cgrp->self);
++}
++
++/* Store @prog (reference already held by the caller via bpf_prog_get()) in
++ * the slot for @type, replacing and putting any program already there. */
++int bpf_cgroup_attach_stub(struct cgroup *cgrp, struct bpf_prog *prog,
++			   u32 type, u32 flags)
++{
++	unsigned long irqflags;
++	struct bpf_prog *old;
++
++	/* No run path consumes these, so MULTI degrades to replace.
++	 * The flags are otherwise ignored. */
++	(void)flags;
++
++	if (type >= __MAX_BPF_ATTACH_TYPE)
++		return -EINVAL;
++
++	spin_lock_irqsave(&cgroup_bpf_stub_lock, irqflags);
++	old = cgrp->bpf_stub_progs[type];
++	cgrp->bpf_stub_progs[type] = prog;
++	spin_unlock_irqrestore(&cgroup_bpf_stub_lock, irqflags);
++
++	if (old)
++		bpf_prog_put(old);
++
++	return 0;
++}
++
++int bpf_cgroup_detach_stub(struct cgroup *cgrp, u32 type)
++{
++	unsigned long irqflags;
++	struct bpf_prog *old;
++
++	if (type >= __MAX_BPF_ATTACH_TYPE)
++		return -EINVAL;
++
++	spin_lock_irqsave(&cgroup_bpf_stub_lock, irqflags);
++	old = cgrp->bpf_stub_progs[type];
++	cgrp->bpf_stub_progs[type] = NULL;
++	spin_unlock_irqrestore(&cgroup_bpf_stub_lock, irqflags);
++
++	if (!old)
++		return -ENOENT;
++
++	bpf_prog_put(old);
++	return 0;
++}
++
++/* Called from kernel/cgroup.c before a cgroup is freed (and for the embedded
++ * root cgroup on hierarchy teardown): drop every stored program reference.
++ * Slots start NULL (cgroups come from kzalloc), so this is a no-op for
++ * cgroups that never saw an attach. */
++void cgroup_bpf_stub_release(struct cgroup *cgrp)
++{
++	unsigned int type;
++
++	for (type = 0; type < __MAX_BPF_ATTACH_TYPE; type++) {
++		struct bpf_prog *prog;
++		unsigned long irqflags;
++
++		spin_lock_irqsave(&cgroup_bpf_stub_lock, irqflags);
++		prog = cgrp->bpf_stub_progs[type];
++		cgrp->bpf_stub_progs[type] = NULL;
++		spin_unlock_irqrestore(&cgroup_bpf_stub_lock, irqflags);
++
++		if (prog)
++			bpf_prog_put(prog);
++	}
++}
+diff --git a/kernel-3.18/kernel/bpf/core.c b/kernel-3.18/kernel/bpf/core.c
+index 71a9e5be6..b5e64c64b 100644
+--- a/kernel-3.18/kernel/bpf/core.c
++++ b/kernel-3.18/kernel/bpf/core.c
+@@ -646,6 +646,25 @@ static void bpf_prog_free_deferred(struct work_struct *work)
+ }
+ 
+ /* Free internal BPF program */
++/* From 4.4: a prog_array is owned by the first program stored in it, and every
++ * later program must match its type and JIT state. */
++bool bpf_prog_array_compatible(struct bpf_array *array,
++			       const struct bpf_prog *fp)
++{
++	if (!array->owner_prog_type) {
++		/* There's no owner yet where we could check for
++		 * compatibility.
++		 */
++		array->owner_prog_type = fp->aux->prog_type;
++		array->owner_jited = fp->jited;
++
++		return true;
++	}
++
++	return array->owner_prog_type == fp->aux->prog_type &&
++	       array->owner_jited == fp->jited;
++}
++
+ void bpf_prog_free(struct bpf_prog *fp)
+ {
+ 	struct bpf_prog_aux *aux = fp->aux;
+diff --git a/kernel-3.18/kernel/bpf/hashtab.c b/kernel-3.18/kernel/bpf/hashtab.c
+new file mode 100644
+index 000000000..fdde20520
+--- /dev/null
++++ b/kernel-3.18/kernel/bpf/hashtab.c
+@@ -0,0 +1,576 @@
++/* Copyright (c) 2011-2014 PLUMgrid, http://plumgrid.com
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of version 2 of the GNU General Public
++ * License as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
++ * General Public License for more details.
++ */
++#include <linux/bpf.h>
++#include <linux/jhash.h>
++#include <linux/filter.h>
++#include <linux/vmalloc.h>
++#include <linux/smp.h>
++
++struct bpf_htab {
++	struct bpf_map map;
++	struct hlist_head *buckets;
++	raw_spinlock_t lock;
++	u32 count;	/* number of elements in this hashtable */
++	u32 n_buckets;	/* number of hash buckets */
++	u32 elem_size;	/* size of each element in bytes */
++};
++
++/* each htab element is struct htab_elem + key + value */
++struct htab_elem {
++	struct hlist_node hash_node;
++	struct rcu_head rcu;
++	u32 hash;
++	char key[0] __aligned(8);
++};
++
++/* Called from syscall */
++static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
++{
++	struct bpf_htab *htab;
++	int err, i;
++
++	htab = kzalloc(sizeof(*htab), GFP_USER);
++	if (!htab)
++		return ERR_PTR(-ENOMEM);
++
++	/* mandatory map attributes */
++	htab->map.key_size = attr->key_size;
++	htab->map.value_size = attr->value_size;
++	htab->map.max_entries = attr->max_entries;
++
++	/* check sanity of attributes.
++	 * value_size == 0 may be allowed in the future to use map as a set
++	 */
++	err = -EINVAL;
++	if (htab->map.max_entries == 0 || htab->map.key_size == 0 ||
++	    htab->map.value_size == 0)
++		goto free_htab;
++
++	/* hash table size must be power of 2 */
++	htab->n_buckets = roundup_pow_of_two(htab->map.max_entries);
++
++	err = -E2BIG;
++	if (htab->map.key_size > MAX_BPF_STACK)
++		/* eBPF programs initialize keys on stack, so they cannot be
++		 * larger than max stack size
++		 */
++		goto free_htab;
++
++	if (htab->map.value_size >= (1 << (KMALLOC_SHIFT_MAX - 1)) -
++	    MAX_BPF_STACK - sizeof(struct htab_elem))
++		/* if value_size is bigger, the user space won't be able to
++		 * access the elements via bpf syscall. This check also makes
++		 * sure that the elem_size doesn't overflow and it's
++		 * kmalloc-able later in htab_map_update_elem()
++		 */
++		goto free_htab;
++
++	htab->elem_size = sizeof(struct htab_elem) +
++			  round_up(htab->map.key_size, 8) +
++			  htab->map.value_size;
++
++	/* prevent zero size kmalloc and check for u32 overflow */
++	if (htab->n_buckets == 0 ||
++	    htab->n_buckets > U32_MAX / sizeof(struct hlist_head))
++		goto free_htab;
++
++	if ((u64) htab->n_buckets * sizeof(struct hlist_head) +
++	    (u64) htab->elem_size * htab->map.max_entries >=
++	    U32_MAX - PAGE_SIZE)
++		/* make sure page count doesn't overflow */
++		goto free_htab;
++
++	htab->map.pages = round_up(htab->n_buckets * sizeof(struct hlist_head) +
++				   htab->elem_size * htab->map.max_entries,
++				   PAGE_SIZE) >> PAGE_SHIFT;
++
++	err = -ENOMEM;
++	htab->buckets = kmalloc_array(htab->n_buckets, sizeof(struct hlist_head),
++				      GFP_USER | __GFP_NOWARN);
++
++	if (!htab->buckets) {
++		htab->buckets = vmalloc(htab->n_buckets * sizeof(struct hlist_head));
++		if (!htab->buckets)
++			goto free_htab;
++	}
++
++	for (i = 0; i < htab->n_buckets; i++)
++		INIT_HLIST_HEAD(&htab->buckets[i]);
++
++	raw_spin_lock_init(&htab->lock);
++	htab->count = 0;
++
++	return &htab->map;
++
++free_htab:
++	kfree(htab);
++	return ERR_PTR(err);
++}
++
++static inline u32 htab_map_hash(const void *key, u32 key_len)
++{
++	return jhash(key, key_len, 0);
++}
++
++static inline struct hlist_head *select_bucket(struct bpf_htab *htab, u32 hash)
++{
++	return &htab->buckets[hash & (htab->n_buckets - 1)];
++}
++
++static struct htab_elem *lookup_elem_raw(struct hlist_head *head, u32 hash,
++					 void *key, u32 key_size)
++{
++	struct htab_elem *l;
++
++	hlist_for_each_entry_rcu(l, head, hash_node)
++		if (l->hash == hash && !memcmp(&l->key, key, key_size))
++			return l;
++
++	return NULL;
++}
++
++/* Called from syscall or from eBPF program */
++static void *htab_map_lookup_elem(struct bpf_map *map, void *key)
++{
++	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
++	struct hlist_head *head;
++	struct htab_elem *l;
++	u32 hash, key_size;
++
++	/* Must be called with rcu_read_lock. */
++	WARN_ON_ONCE(!rcu_read_lock_held());
++
++	key_size = map->key_size;
++
++	hash = htab_map_hash(key, key_size);
++
++	head = select_bucket(htab, hash);
++
++	l = lookup_elem_raw(head, hash, key, key_size);
++
++	if (l)
++		return l->key + round_up(map->key_size, 8);
++
++	return NULL;
++}
++
++/* Called from syscall */
++static int htab_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
++{
++	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
++	struct hlist_head *head;
++	struct htab_elem *l, *next_l;
++	u32 hash, key_size;
++	int i;
++
++	WARN_ON_ONCE(!rcu_read_lock_held());
++
++	key_size = map->key_size;
++
++	hash = htab_map_hash(key, key_size);
++
++	head = select_bucket(htab, hash);
++
++	/* lookup the key */
++	l = lookup_elem_raw(head, hash, key, key_size);
++
++	if (!l) {
++		i = 0;
++		goto find_first_elem;
++	}
++
++	/* key was found, get next key in the same bucket */
++	next_l = hlist_entry_safe(rcu_dereference_raw(hlist_next_rcu(&l->hash_node)),
++				  struct htab_elem, hash_node);
++
++	if (next_l) {
++		/* if next elem in this hash list is non-zero, just return it */
++		memcpy(next_key, next_l->key, key_size);
++		return 0;
++	}
++
++	/* no more elements in this hash list, go to the next bucket */
++	i = hash & (htab->n_buckets - 1);
++	i++;
++
++find_first_elem:
++	/* iterate over buckets */
++	for (; i < htab->n_buckets; i++) {
++		head = select_bucket(htab, i);
++
++		/* pick first element in the bucket */
++		next_l = hlist_entry_safe(rcu_dereference_raw(hlist_first_rcu(head)),
++					  struct htab_elem, hash_node);
++		if (next_l) {
++			/* if it's not empty, just return it */
++			memcpy(next_key, next_l->key, key_size);
++			return 0;
++		}
++	}
++
++	/* itereated over all buckets and all elements */
++	return -ENOENT;
++}
++
++/* Called from syscall or from eBPF program */
++static int htab_map_update_elem(struct bpf_map *map, void *key, void *value,
++				u64 map_flags)
++{
++	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
++	struct htab_elem *l_new, *l_old;
++	struct hlist_head *head;
++	unsigned long flags;
++	u32 key_size;
++	int ret;
++
++	if (map_flags > BPF_EXIST)
++		/* unknown flags */
++		return -EINVAL;
++
++	WARN_ON_ONCE(!rcu_read_lock_held());
++
++	/* allocate new element outside of lock */
++	l_new = kmalloc(htab->elem_size, GFP_ATOMIC | __GFP_NOWARN);
++	if (!l_new)
++		return -ENOMEM;
++
++	key_size = map->key_size;
++
++	memcpy(l_new->key, key, key_size);
++	memcpy(l_new->key + round_up(key_size, 8), value, map->value_size);
++
++	l_new->hash = htab_map_hash(l_new->key, key_size);
++
++	/* bpf_map_update_elem() can be called in_irq() */
++	raw_spin_lock_irqsave(&htab->lock, flags);
++
++	head = select_bucket(htab, l_new->hash);
++
++	l_old = lookup_elem_raw(head, l_new->hash, key, key_size);
++
++	if (!l_old && unlikely(htab->count >= map->max_entries)) {
++		/* if elem with this 'key' doesn't exist and we've reached
++		 * max_entries limit, fail insertion of new elem
++		 */
++		ret = -E2BIG;
++		goto err;
++	}
++
++	if (l_old && map_flags == BPF_NOEXIST) {
++		/* elem already exists */
++		ret = -EEXIST;
++		goto err;
++	}
++
++	if (!l_old && map_flags == BPF_EXIST) {
++		/* elem doesn't exist, cannot update it */
++		ret = -ENOENT;
++		goto err;
++	}
++
++	/* add new element to the head of the list, so that concurrent
++	 * search will find it before old elem
++	 */
++	hlist_add_head_rcu(&l_new->hash_node, head);
++	if (l_old) {
++		hlist_del_rcu(&l_old->hash_node);
++		kfree_rcu(l_old, rcu);
++	} else {
++		htab->count++;
++	}
++	raw_spin_unlock_irqrestore(&htab->lock, flags);
++
++	return 0;
++err:
++	raw_spin_unlock_irqrestore(&htab->lock, flags);
++	kfree(l_new);
++	return ret;
++}
++
++/* Called from syscall or from eBPF program */
++static int htab_map_delete_elem(struct bpf_map *map, void *key)
++{
++	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
++	struct hlist_head *head;
++	struct htab_elem *l;
++	unsigned long flags;
++	u32 hash, key_size;
++	int ret = -ENOENT;
++
++	WARN_ON_ONCE(!rcu_read_lock_held());
++
++	key_size = map->key_size;
++
++	hash = htab_map_hash(key, key_size);
++
++	raw_spin_lock_irqsave(&htab->lock, flags);
++
++	head = select_bucket(htab, hash);
++
++	l = lookup_elem_raw(head, hash, key, key_size);
++
++	if (l) {
++		hlist_del_rcu(&l->hash_node);
++		htab->count--;
++		kfree_rcu(l, rcu);
++		ret = 0;
++	}
++
++	raw_spin_unlock_irqrestore(&htab->lock, flags);
++	return ret;
++}
++
++static void delete_all_elements(struct bpf_htab *htab)
++{
++	int i;
++
++	for (i = 0; i < htab->n_buckets; i++) {
++		struct hlist_head *head = select_bucket(htab, i);
++		struct hlist_node *n;
++		struct htab_elem *l;
++
++		hlist_for_each_entry_safe(l, n, head, hash_node) {
++			hlist_del_rcu(&l->hash_node);
++			htab->count--;
++			kfree(l);
++		}
++	}
++}
++
++/* Called when map->refcnt goes to zero, either from workqueue or from syscall */
++static void htab_map_free(struct bpf_map *map)
++{
++	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
++
++	/* at this point bpf_prog->aux->refcnt == 0 and this map->refcnt == 0,
++	 * so the programs (can be more than one that used this map) were
++	 * disconnected from events. Wait for outstanding critical sections in
++	 * these programs to complete
++	 */
++	synchronize_rcu();
++
++	/* some of kfree_rcu() callbacks for elements of this map may not have
++	 * executed. It's ok. Proceed to free residual elements and map itself
++	 */
++	delete_all_elements(htab);
++	kvfree(htab->buckets);
++	kfree(htab);
++}
++
++static const struct bpf_map_ops htab_ops = {
++	.map_alloc = htab_map_alloc,
++	.map_free = htab_map_free,
++	.map_get_next_key = htab_map_get_next_key,
++	.map_lookup_elem = htab_map_lookup_elem,
++	.map_update_elem = htab_map_update_elem,
++	.map_delete_elem = htab_map_delete_elem,
++};
++
++static struct bpf_map_type_list htab_type __read_mostly = {
++	.ops = &htab_ops,
++	.type = BPF_MAP_TYPE_HASH,
++};
++
++static int __init register_htab_map(void)
++{
++	bpf_register_map_type(&htab_type);
++	return 0;
++}
++late_initcall(register_htab_map);
++
++/* BPF_MAP_TYPE_PERCPU_HASH - time_in_state.o declares two of these, see the
++ * comment above percpu_array_map_alloc() in arraymap.c for why the per-CPU
++ * types are needed and for the value layout: the value of an element is one
++ * block of num_possible_cpus() per-CPU values and map->value_size is that whole
++ * block, which is what the syscall layer copies. */
++static struct bpf_map *htab_percpu_map_alloc(union bpf_attr *attr)
++{
++	/* Per-CPU maps are disabled for now (slab corruption seen with
++	 * them enabled); the implementation is kept below under #if 0. */
++	(void) attr;
++	return ERR_PTR(-EOPNOTSUPP);
++}
++#if 0 /* disabled per-CPU implementation */
++
++	union bpf_attr scaled = *attr;
++	u64 value_size;
++
++	value_size = (u64) attr->value_size * num_possible_cpus();
++	if (value_size > U32_MAX)
++		return ERR_PTR(-E2BIG);
++
++	scaled.value_size = (u32) value_size;
++
++	/* htab_map_alloc() validates the scaled value_size (key_size, empty
++	 * map, and that the resulting element stays kmalloc-able) and allocates
++	 * the buckets and elements */
++	return htab_map_alloc(&scaled);
++#endif
++
++/* Called from eBPF program: the value of the current CPU only */
++static void *htab_percpu_map_lookup_elem(struct bpf_map *map, void *key)
++{
++	void *value = htab_map_lookup_elem(map, key);
++
++	if (!value)
++		return NULL;
++
++	return value + raw_smp_processor_id() * bpf_map_prog_value_size(map);
++}
++
++/* Called from eBPF program: a program passes one CPU's worth of value
++ * (upstream's pcpu_copy_value() with onallcpus == false) and it lands in the
++ * current CPU's slice only.  An existing element is updated in place so that
++ * the other CPUs' slices keep their data, as upstream does; a new element is
++ * created with the other slices zeroed - upstream gets those zeroes from the
++ * per-CPU allocator, while an element here comes from kmalloc().  The whole
++ * block is written by the syscall path through htab_map_update_elem(). */
++static int htab_percpu_map_update_elem(struct bpf_map *map, void *key,
++				       void *value, u64 map_flags)
++{
++	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
++	struct hlist_head *head;
++	struct htab_elem *l_new, *l_old;
++	unsigned long flags;
++	u32 value_size, value_off, hash, key_size;
++	int ret;
++
++	if (map_flags > BPF_EXIST)
++		/* unknown flags */
++		return -EINVAL;
++
++	WARN_ON_ONCE(!rcu_read_lock_held());
++
++	key_size = map->key_size;
++	value_size = bpf_map_prog_value_size(map);
++	value_off = raw_smp_processor_id() * value_size;
++
++	hash = htab_map_hash(key, key_size);
++
++	/* allocate new element outside of lock */
++	l_new = kmalloc(htab->elem_size, GFP_ATOMIC | __GFP_NOWARN);
++	if (!l_new)
++		return -ENOMEM;
++
++	memcpy(l_new->key, key, key_size);
++	memset(l_new->key + round_up(key_size, 8), 0, map->value_size);
++	memcpy(l_new->key + round_up(key_size, 8) + value_off, value, value_size);
++	l_new->hash = hash;
++
++	/* bpf_map_update_elem() can be called in_irq() */
++	raw_spin_lock_irqsave(&htab->lock, flags);
++
++	head = select_bucket(htab, hash);
++
++	l_old = lookup_elem_raw(head, hash, key, key_size);
++
++	if (l_old) {
++		if (map_flags == BPF_NOEXIST) {
++			/* elem already exists */
++			ret = -EEXIST;
++			goto free_new;
++		}
++		/* per-CPU hash map can update the value in place */
++		memcpy(l_old->key + round_up(key_size, 8) + value_off,
++		       value, value_size);
++		ret = 0;
++		goto free_new;
++	}
++
++	if (map_flags == BPF_EXIST) {
++		/* elem doesn't exist, cannot update it */
++		ret = -ENOENT;
++		goto free_new;
++	}
++
++	if (unlikely(htab->count >= map->max_entries)) {
++		/* if elem with this 'key' doesn't exist and we've reached
++		 * max_entries limit, fail insertion of new elem
++		 */
++		ret = -E2BIG;
++		goto free_new;
++	}
++
++	/* add new element to the head of the list, so that concurrent
++	 * search will find it before old elem
++	 */
++	hlist_add_head_rcu(&l_new->hash_node, head);
++	htab->count++;
++	raw_spin_unlock_irqrestore(&htab->lock, flags);
++
++	return 0;
++
++free_new:
++	raw_spin_unlock_irqrestore(&htab->lock, flags);
++	kfree(l_new);
++	return ret;
++}
++
++static const struct bpf_map_ops htab_percpu_map_ops = {
++	.map_alloc = htab_percpu_map_alloc,
++	.map_free = htab_map_free,
++	.map_get_next_key = htab_map_get_next_key,
++	.map_lookup_elem = htab_percpu_map_lookup_elem,
++	.map_lookup_elem_sys_only = htab_map_lookup_elem,
++	.map_update_elem = htab_percpu_map_update_elem,
++	.map_update_elem_sys_only = htab_map_update_elem,
++	.map_delete_elem = htab_map_delete_elem,
++};
++
++static struct bpf_map_type_list htab_percpu_type __read_mostly = {
++	.ops = &htab_percpu_map_ops,
++	.type = BPF_MAP_TYPE_PERCPU_HASH,
++};
++
++static int __init register_htab_percpu_map(void)
++{
++	bpf_register_map_type(&htab_percpu_type);
++	return 0;
++}
++late_initcall(register_htab_percpu_map);
++
++/* BPF_MAP_TYPE_DEVMAP_HASH, declared by the tethering offload program. 3.18
++ * has no XDP data path or devmap redirect, so this is a stub alias over the
++ * ordinary HASH map; only the reported map_type differs. Programs using it
++ * load but are never executed on this kernel. */
++static struct bpf_map *devmap_hash_map_alloc(union bpf_attr *attr)
++{
++	struct bpf_map *map;
++
++	map = htab_map_alloc(attr);
++	if (IS_ERR(map))
++		return map;
++
++	map->map_type = BPF_MAP_TYPE_DEVMAP_HASH;
++	return map;
++}
++
++static const struct bpf_map_ops devmap_hash_ops = {
++	.map_alloc = devmap_hash_map_alloc,
++	.map_free = htab_map_free,
++	.map_get_next_key = htab_map_get_next_key,
++	.map_lookup_elem = htab_map_lookup_elem,
++	.map_update_elem = htab_map_update_elem,
++	.map_delete_elem = htab_map_delete_elem,
++};
++
++static struct bpf_map_type_list devmap_hash_type __read_mostly = {
++	.ops = &devmap_hash_ops,
++	.type = BPF_MAP_TYPE_DEVMAP_HASH,
++};
++
++static int __init register_devmap_hash_map(void)
++{
++	bpf_register_map_type(&devmap_hash_type);
++	return 0;
++}
++late_initcall(register_devmap_hash_map);
+diff --git a/kernel-3.18/kernel/bpf/helpers.c b/kernel-3.18/kernel/bpf/helpers.c
+new file mode 100644
+index 000000000..bdddb78fa
+--- /dev/null
++++ b/kernel-3.18/kernel/bpf/helpers.c
+@@ -0,0 +1,376 @@
++/* Copyright (c) 2011-2014 PLUMgrid, http://plumgrid.com
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of version 2 of the GNU General Public
++ * License as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
++ * General Public License for more details.
++ */
++#include <linux/bpf.h>
++#include <linux/rcupdate.h>
++#include <linux/random.h>
++#include <linux/smp.h>
++#include <linux/ktime.h>
++#include <linux/timekeeping.h>
++#include <linux/sched.h>
++#include <linux/uidgid.h>
++#include <linux/err.h>
++
++/* If kernel subsystem is allowing eBPF programs to call this function,
++ * inside its own verifier_ops->get_func_proto() callback it should return
++ * bpf_map_lookup_elem_proto, so that verifier can properly check the arguments
++ *
++ * Different map implementations will rely on rcu in map methods
++ * lookup/update/delete, therefore eBPF programs must run under rcu lock
++ * if program is allowed to access maps, so check rcu_read_lock_held in
++ * all three functions.
++ */
++static u64 bpf_map_lookup_elem(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	/* verifier checked that R1 contains a valid pointer to bpf_map
++	 * and R2 points to a program stack and map->key_size bytes were
++	 * initialized
++	 */
++	struct bpf_map *map = (struct bpf_map *) (unsigned long) r1;
++	void *key = (void *) (unsigned long) r2;
++	void *value;
++
++	WARN_ON_ONCE(!rcu_read_lock_held());
++
++	value = map->ops->map_lookup_elem(map, key);
++
++	/* lookup() returns either pointer to element value or NULL
++	 * which is the meaning of PTR_TO_MAP_VALUE_OR_NULL type
++	 */
++	return (unsigned long) value;
++}
++
++const struct bpf_func_proto bpf_map_lookup_elem_proto = {
++	.func		= bpf_map_lookup_elem,
++	.gpl_only	= false,
++	.ret_type	= RET_PTR_TO_MAP_VALUE_OR_NULL,
++	.arg1_type	= ARG_CONST_MAP_PTR,
++	.arg2_type	= ARG_PTR_TO_MAP_KEY,
++};
++
++static u64 bpf_map_update_elem(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	struct bpf_map *map = (struct bpf_map *) (unsigned long) r1;
++	void *key = (void *) (unsigned long) r2;
++	void *value = (void *) (unsigned long) r3;
++
++	WARN_ON_ONCE(!rcu_read_lock_held());
++
++	return map->ops->map_update_elem(map, key, value, r4);
++}
++
++const struct bpf_func_proto bpf_map_update_elem_proto = {
++	.func		= bpf_map_update_elem,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_CONST_MAP_PTR,
++	.arg2_type	= ARG_PTR_TO_MAP_KEY,
++	.arg3_type	= ARG_PTR_TO_MAP_VALUE,
++	.arg4_type	= ARG_ANYTHING,
++};
++
++static u64 bpf_map_delete_elem(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	struct bpf_map *map = (struct bpf_map *) (unsigned long) r1;
++	void *key = (void *) (unsigned long) r2;
++
++	WARN_ON_ONCE(!rcu_read_lock_held());
++
++	return map->ops->map_delete_elem(map, key);
++}
++
++const struct bpf_func_proto bpf_map_delete_elem_proto = {
++	.func		= bpf_map_delete_elem,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_CONST_MAP_PTR,
++	.arg2_type	= ARG_PTR_TO_MAP_KEY,
++};
++
++/* 4.4 uses bpf_user_rnd_u32() (a per-task seed added in 4.1); 3.18 has only
++ * the kernel PRNG, which is what the helper is used for anyway. */
++static u64 bpf_get_prandom_u32(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	return prandom_u32();
++}
++
++const struct bpf_func_proto bpf_get_prandom_u32_proto = {
++	.func		= bpf_get_prandom_u32,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++};
++
++static u64 bpf_get_smp_processor_id(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	return raw_smp_processor_id();
++}
++
++const struct bpf_func_proto bpf_get_smp_processor_id_proto = {
++	.func		= bpf_get_smp_processor_id,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++};
++
++static u64 bpf_ktime_get_ns(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	/* NMI safe access to clock monotonic */
++	return ktime_get_mono_fast_ns();
++}
++
++const struct bpf_func_proto bpf_ktime_get_ns_proto = {
++	.func		= bpf_ktime_get_ns,
++	.gpl_only	= true,
++	.ret_type	= RET_INTEGER,
++};
++
++static u64 bpf_get_current_pid_tgid(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	struct task_struct *task = current;
++
++	if (!task)
++		return -EINVAL;
++
++	return (u64) task->tgid << 32 | task->pid;
++}
++
++const struct bpf_func_proto bpf_get_current_pid_tgid_proto = {
++	.func		= bpf_get_current_pid_tgid,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++};
++
++static u64 bpf_get_current_uid_gid(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	struct task_struct *task = current;
++	kuid_t uid;
++	kgid_t gid;
++
++	if (!task)
++		return -EINVAL;
++
++	current_uid_gid(&uid, &gid);
++	return (u64) from_kgid(&init_user_ns, gid) << 32 |
++		from_kuid(&init_user_ns, uid);
++}
++
++const struct bpf_func_proto bpf_get_current_uid_gid_proto = {
++	.func		= bpf_get_current_uid_gid,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++};
++
++static u64 bpf_get_current_comm(u64 r1, u64 size, u64 r3, u64 r4, u64 r5)
++{
++	struct task_struct *task = current;
++	char *buf = (char *) (long) r1;
++
++	if (!task)
++		return -EINVAL;
++
++	strlcpy(buf, task->comm, min_t(size_t, size, sizeof(task->comm)));
++	return 0;
++}
++
++const struct bpf_func_proto bpf_get_current_comm_proto = {
++	.func		= bpf_get_current_comm,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_PTR_TO_STACK,
++	.arg2_type	= ARG_CONST_STACK_SIZE,
++};
++
++/* ------------------------------------------------------------------ */
++/* skb helpers for the tethering/netd objects                         */
++/* ------------------------------------------------------------------ */
++
++/* The programs that call these helpers (tethering offload.o, clatd.o,
++ * dscpPolicy.o, netd.o) are verified and loaded so that bpfloader can pin
++ * them, but they are never attached or executed on this kernel: there is no
++ * XDP/TC data path in 3.18 and BPF_PROG_ATTACH only stores the program (see
++ * kernel/bpf/cgroup_stub.c).  The skb helpers below are therefore stubs with
++ * the correct signature that return -EOPNOTSUPP (0 for redirect, i.e. no
++ * redirect target).  Proto shapes follow net/core/filter.c of 4.4 (4.9 for
++ * skb_load_bytes, skb_pull_data, csum_update, skb_change_proto,
++ * get_socket_cookie, get_socket_uid), with the 4.9
++ * ARG_PTR_TO_RAW_STACK/ARG_CONST_STACK_SIZE_OR_ZERO mapped to
++ * ARG_PTR_TO_STACK/ARG_CONST_STACK_SIZE. */
++
++static u64 bpf_skb_store_bytes_stub(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	return -EOPNOTSUPP;
++}
++
++const struct bpf_func_proto bpf_skb_store_bytes_proto = {
++	.func		= bpf_skb_store_bytes_stub,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_PTR_TO_CTX,
++	.arg2_type	= ARG_ANYTHING,
++	.arg3_type	= ARG_PTR_TO_STACK,
++	.arg4_type	= ARG_CONST_STACK_SIZE,
++	.arg5_type	= ARG_ANYTHING,
++};
++
++static u64 bpf_l3_csum_replace_stub(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	return -EOPNOTSUPP;
++}
++
++const struct bpf_func_proto bpf_l3_csum_replace_proto = {
++	.func		= bpf_l3_csum_replace_stub,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_PTR_TO_CTX,
++	.arg2_type	= ARG_ANYTHING,
++	.arg3_type	= ARG_ANYTHING,
++	.arg4_type	= ARG_ANYTHING,
++	.arg5_type	= ARG_ANYTHING,
++};
++
++static u64 bpf_l4_csum_replace_stub(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	return -EOPNOTSUPP;
++}
++
++const struct bpf_func_proto bpf_l4_csum_replace_proto = {
++	.func		= bpf_l4_csum_replace_stub,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_PTR_TO_CTX,
++	.arg2_type	= ARG_ANYTHING,
++	.arg3_type	= ARG_ANYTHING,
++	.arg4_type	= ARG_ANYTHING,
++	.arg5_type	= ARG_ANYTHING,
++};
++
++static u64 bpf_redirect_stub(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	return 0;
++}
++
++const struct bpf_func_proto bpf_redirect_proto = {
++	.func		= bpf_redirect_stub,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_ANYTHING,
++	.arg2_type	= ARG_ANYTHING,
++};
++
++static u64 bpf_skb_load_bytes_stub(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	return -EOPNOTSUPP;
++}
++
++const struct bpf_func_proto bpf_skb_load_bytes_proto = {
++	.func		= bpf_skb_load_bytes_stub,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_PTR_TO_CTX,
++	.arg2_type	= ARG_ANYTHING,
++	.arg3_type	= ARG_PTR_TO_UNINIT_MEM,
++	.arg4_type	= ARG_CONST_STACK_SIZE,
++};
++
++static u64 bpf_skb_change_proto_stub(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	return -EOPNOTSUPP;
++}
++
++const struct bpf_func_proto bpf_skb_change_proto_proto = {
++	.func		= bpf_skb_change_proto_stub,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_PTR_TO_CTX,
++	.arg2_type	= ARG_ANYTHING,
++	.arg3_type	= ARG_ANYTHING,
++};
++
++static u64 bpf_skb_pull_data_stub(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	return -EOPNOTSUPP;
++}
++
++const struct bpf_func_proto bpf_skb_pull_data_proto = {
++	.func		= bpf_skb_pull_data_stub,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_PTR_TO_CTX,
++	.arg2_type	= ARG_ANYTHING,
++};
++
++static u64 bpf_csum_update_stub(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	return -EOPNOTSUPP;
++}
++
++const struct bpf_func_proto bpf_csum_update_proto = {
++	.func		= bpf_csum_update_stub,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_PTR_TO_CTX,
++	.arg2_type	= ARG_ANYTHING,
++};
++
++static u64 bpf_skb_change_head_stub(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	return -EOPNOTSUPP;
++}
++
++const struct bpf_func_proto bpf_skb_change_head_proto = {
++	.func		= bpf_skb_change_head_stub,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_PTR_TO_CTX,
++	.arg2_type	= ARG_ANYTHING,
++	.arg3_type	= ARG_ANYTHING,
++};
++
++/* Stub: 3.18's struct sock has no sk_cookie; return 0, upstream's
++ * "no socket" answer. */
++static u64 bpf_get_socket_cookie_stub(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	return 0;
++}
++
++const struct bpf_func_proto bpf_get_socket_cookie_proto = {
++	.func		= bpf_get_socket_cookie_stub,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_PTR_TO_CTX,
++};
++
++/* Stub: 3.18's struct sock has no sk_uid; return overflowuid, upstream's
++ * "no socket" answer. */
++static u64 bpf_get_socket_uid_stub(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	return overflowuid;
++}
++
++const struct bpf_func_proto bpf_get_socket_uid_proto = {
++	.func		= bpf_get_socket_uid_stub,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_PTR_TO_CTX,
++};
++
++/* Real implementation, unlike the stubs above: 3.18's timekeeping already
++ * provides ktime_get_boot_ns() (CLOCK_BOOTTIME, i.e. monotonic plus suspend
++ * time), which is exactly what upstream's helper returns. */
++static u64 bpf_ktime_get_boot_ns(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++{
++	return ktime_get_boot_ns();
++}
++
++const struct bpf_func_proto bpf_ktime_get_boot_ns_proto = {
++	.func		= bpf_ktime_get_boot_ns,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++};
+diff --git a/kernel-3.18/kernel/bpf/inode.c b/kernel-3.18/kernel/bpf/inode.c
+new file mode 100644
+index 000000000..a69349af2
+--- /dev/null
++++ b/kernel-3.18/kernel/bpf/inode.c
+@@ -0,0 +1,425 @@
++/*
++ * Minimal file system backend for holding eBPF maps and programs,
++ * used by bpf(2) object pinning.
++ *
++ * Authors:
++ *
++ *	Daniel Borkmann <daniel@iogearbox.net>
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * version 2 as published by the Free Software Foundation.
++ *
++ * Backported from Linux 4.4. Android userspace pins its maps and programs
++ * under /sys/fs/bpf (bpfloader, gpuservice, netd) and statfs()es the path
++ * for BPF_FS_MAGIC.
++ *
++ * Changes for 3.18:
++ *   - kern_path_create() takes a string here, not a struct filename;
++ *   - d_backing_inode() does not exist yet, d_inode() is used instead;
++ *   - sysfs_create_mount_point() (3.19) is absent, so the mount point is
++ *     created by the vendor init.rc together with the mount itself:
++ *         mkdir /sys/fs/bpf 0770 root system
++ *         mount bpf bpf /sys/fs/bpf
++ *   - the pinned inodes carry bpf_map_fops / bpf_prog_fops (exported from
++ *     syscall.c) so that open() on a pinned object yields a usable bpf fd,
++ *     which is what Android's libbpf does instead of BPF_OBJ_GET.
++ */
++
++#include <linux/module.h>
++#include <linux/magic.h>
++#include <linux/major.h>
++#include <linux/mount.h>
++#include <linux/namei.h>
++#include <linux/fs.h>
++#include <linux/kdev_t.h>
++#include <linux/filter.h>
++#include <linux/bpf.h>
++
++enum bpf_type {
++	BPF_TYPE_UNSPEC	= 0,
++	BPF_TYPE_PROG,
++	BPF_TYPE_MAP,
++};
++
++static void *bpf_any_get(void *raw, enum bpf_type type)
++{
++	switch (type) {
++	case BPF_TYPE_PROG:
++		raw = bpf_prog_inc(raw);
++		break;
++	case BPF_TYPE_MAP:
++		raw = bpf_map_inc(raw, true);
++		break;
++	default:
++		WARN_ON_ONCE(1);
++		break;
++	}
++
++	return raw;
++}
++
++static void bpf_any_put(void *raw, enum bpf_type type)
++{
++	switch (type) {
++	case BPF_TYPE_PROG:
++		bpf_prog_put(raw);
++		break;
++	case BPF_TYPE_MAP:
++		bpf_map_put_with_uref(raw);
++		break;
++	default:
++		WARN_ON_ONCE(1);
++		break;
++	}
++}
++
++static void *bpf_fd_probe_obj(u32 ufd, enum bpf_type *type)
++{
++	void *raw;
++
++	*type = BPF_TYPE_MAP;
++	raw = bpf_map_get_with_uref(ufd);
++	if (IS_ERR(raw)) {
++		*type = BPF_TYPE_PROG;
++		raw = bpf_prog_get(ufd);
++	}
++
++	return raw;
++}
++
++static const struct inode_operations bpf_dir_iops;
++
++static const struct inode_operations bpf_prog_iops = { };
++static const struct inode_operations bpf_map_iops  = { };
++
++static struct inode *bpf_get_inode(struct super_block *sb,
++				   const struct inode *dir,
++				   umode_t mode)
++{
++	struct inode *inode;
++
++	switch (mode & S_IFMT) {
++	case S_IFDIR:
++	case S_IFREG:
++		break;
++	default:
++		return ERR_PTR(-EINVAL);
++	}
++
++	inode = new_inode(sb);
++	if (!inode)
++		return ERR_PTR(-ENOSPC);
++
++	inode->i_ino = get_next_ino();
++	inode->i_atime = CURRENT_TIME;
++	inode->i_mtime = inode->i_atime;
++	inode->i_ctime = inode->i_atime;
++
++	inode_init_owner(inode, dir, mode);
++
++	return inode;
++}
++
++static int bpf_inode_type(const struct inode *inode, enum bpf_type *type)
++{
++	*type = BPF_TYPE_UNSPEC;
++	if (inode->i_op == &bpf_prog_iops)
++		*type = BPF_TYPE_PROG;
++	else if (inode->i_op == &bpf_map_iops)
++		*type = BPF_TYPE_MAP;
++	else
++		return -EACCES;
++
++	return 0;
++}
++
++static bool bpf_dname_reserved(const struct dentry *dentry)
++{
++	return strchr(dentry->d_name.name, '.');
++}
++
++static int bpf_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
++{
++	struct inode *inode;
++
++	if (bpf_dname_reserved(dentry))
++		return -EPERM;
++
++	inode = bpf_get_inode(dir->i_sb, dir, mode | S_IFDIR);
++	if (IS_ERR(inode))
++		return PTR_ERR(inode);
++
++	inode->i_op = &bpf_dir_iops;
++	inode->i_fop = &simple_dir_operations;
++
++	inc_nlink(inode);
++	inc_nlink(dir);
++
++	d_instantiate(dentry, inode);
++	dget(dentry);
++
++	return 0;
++}
++
++static int bpf_mkobj_ops(struct inode *dir, struct dentry *dentry,
++			 umode_t mode, const struct inode_operations *iops,
++			 const struct file_operations *fops)
++{
++	struct inode *inode;
++
++	if (bpf_dname_reserved(dentry))
++		return -EPERM;
++
++	inode = bpf_get_inode(dir->i_sb, dir, mode | S_IFREG);
++	if (IS_ERR(inode))
++		return PTR_ERR(inode);
++
++	inode->i_op = iops;
++	inode->i_fop = fops;
++	inode->i_private = dentry->d_fsdata;
++
++	d_instantiate(dentry, inode);
++	dget(dentry);
++
++	return 0;
++}
++
++static int bpf_mkobj(struct inode *dir, struct dentry *dentry, umode_t mode,
++		     dev_t devt)
++{
++	enum bpf_type type = MINOR(devt);
++
++	if (MAJOR(devt) != UNNAMED_MAJOR || !S_ISREG(mode) ||
++	    dentry->d_fsdata == NULL)
++		return -EPERM;
++
++	switch (type) {
++	case BPF_TYPE_PROG:
++		return bpf_mkobj_ops(dir, dentry, mode, &bpf_prog_iops,
++				     &bpf_prog_fops);
++	case BPF_TYPE_MAP:
++		return bpf_mkobj_ops(dir, dentry, mode, &bpf_map_iops,
++				     &bpf_map_fops);
++	default:
++		return -EPERM;
++	}
++}
++
++static const struct inode_operations bpf_dir_iops = {
++	.lookup		= simple_lookup,
++	.mknod		= bpf_mkobj,
++	.mkdir		= bpf_mkdir,
++	.rmdir		= simple_rmdir,
++	.unlink		= simple_unlink,
++	/* bpfloader pins every map under a tmp_ name and rename()s it into
++	 * place; without this the VFS answers -EPERM. */
++	.rename		= simple_rename,
++};
++
++static int bpf_obj_do_pin(const char *pathname, void *raw, enum bpf_type type)
++{
++	struct dentry *dentry;
++	struct inode *dir;
++	struct path path;
++	umode_t mode;
++	dev_t devt;
++	int ret;
++
++	dentry = kern_path_create(AT_FDCWD, pathname, &path, 0);
++	if (IS_ERR(dentry))
++		return PTR_ERR(dentry);
++
++	mode = S_IFREG | ((S_IRUSR | S_IWUSR) & ~current_umask());
++	devt = MKDEV(UNNAMED_MAJOR, type);
++
++	/* 3.18 only declares this hook when CONFIG_SECURITY_PATH is on, and this
++	 * tree builds without it - vfs_mknod() then performs the same checks. */
++#ifdef CONFIG_SECURITY_PATH
++	ret = security_path_mknod(&path, dentry, mode, devt);
++	if (ret)
++		goto out;
++#endif
++
++	dir = path.dentry->d_inode;
++	if (dir->i_op != &bpf_dir_iops) {
++		ret = -EPERM;
++		goto out;
++	}
++
++	dentry->d_fsdata = raw;
++	ret = vfs_mknod(dir, dentry, mode, devt);
++	dentry->d_fsdata = NULL;
++out:
++	done_path_create(&path, dentry);
++	return ret;
++}
++
++int bpf_obj_pin_user(u32 ufd, const char __user *pathname)
++{
++	struct filename *pname;
++	enum bpf_type type;
++	void *raw;
++	int ret;
++
++	pname = getname(pathname);
++	if (IS_ERR(pname))
++		return PTR_ERR(pname);
++
++	raw = bpf_fd_probe_obj(ufd, &type);
++	if (IS_ERR(raw)) {
++		ret = PTR_ERR(raw);
++		goto out;
++	}
++
++	ret = bpf_obj_do_pin(pname->name, raw, type);
++	if (ret != 0)
++		bpf_any_put(raw, type);
++out:
++	putname(pname);
++	return ret;
++}
++
++static void *bpf_obj_do_get(const char *pathname, enum bpf_type *type,
++			    int flags)
++{
++	struct inode *inode;
++	struct path path;
++	void *raw;
++	int ret;
++
++	ret = kern_path(pathname, LOOKUP_FOLLOW, &path);
++	if (ret)
++		return ERR_PTR(ret);
++
++	inode = path.dentry->d_inode;
++	/* 4.9 checks ACC_MODE(flags), not blanket MAY_WRITE: pinned objects
++	 * are typically 0440, and readers (e.g. gpuservice on root:graphics
++	 * programs) only have MAY_READ. */
++	ret = inode_permission(inode, ACC_MODE(flags));
++	if (ret)
++		goto out;
++
++	ret = bpf_inode_type(inode, type);
++	if (ret)
++		goto out;
++
++	raw = bpf_any_get(inode->i_private, *type);
++	if (!IS_ERR(raw))
++		touch_atime(&path);
++
++	path_put(&path);
++	return raw;
++out:
++	path_put(&path);
++	return ERR_PTR(ret);
++}
++
++int bpf_obj_get_user(const char __user *pathname, int flags)
++{
++	enum bpf_type type = BPF_TYPE_UNSPEC;
++	struct filename *pname;
++	int f_flags;
++	int ret = -ENOENT;
++	void *raw;
++
++	f_flags = bpf_get_file_flag(flags);
++	if (f_flags < 0)
++		return f_flags;
++
++	pname = getname(pathname);
++	if (IS_ERR(pname))
++		return PTR_ERR(pname);
++
++	raw = bpf_obj_do_get(pname->name, &type, f_flags);
++	if (IS_ERR(raw)) {
++		ret = PTR_ERR(raw);
++		goto out;
++	}
++
++	if (type == BPF_TYPE_PROG)
++		ret = bpf_prog_new_fd(raw);
++	else if (type == BPF_TYPE_MAP)
++		ret = bpf_map_new_fd(raw);
++	else
++		goto out;
++
++	if (ret < 0)
++		bpf_any_put(raw, type);
++out:
++	putname(pname);
++	return ret;
++}
++
++static void bpf_evict_inode(struct inode *inode)
++{
++	enum bpf_type type;
++
++	truncate_inode_pages_final(&inode->i_data);
++	clear_inode(inode);
++
++	if (!bpf_inode_type(inode, &type))
++		bpf_any_put(inode->i_private, type);
++}
++
++static const struct super_operations bpf_super_ops = {
++	.statfs		= simple_statfs,
++	.drop_inode	= generic_delete_inode,
++	.evict_inode	= bpf_evict_inode,
++};
++
++static int bpf_fill_super(struct super_block *sb, void *data, int silent)
++{
++	static struct tree_descr bpf_rfiles[] = { { "" } };
++	struct inode *inode;
++	int ret;
++
++	ret = simple_fill_super(sb, BPF_FS_MAGIC, bpf_rfiles);
++	if (ret)
++		return ret;
++
++	sb->s_op = &bpf_super_ops;
++
++	inode = sb->s_root->d_inode;
++	inode->i_op = &bpf_dir_iops;
++	inode->i_mode &= ~S_IALLUGO;
++	inode->i_mode |= S_ISVTX | S_IRWXUGO;
++
++	return 0;
++}
++
++static struct dentry *bpf_mount(struct file_system_type *type, int flags,
++				const char *dev_name, void *data)
++{
++	return mount_nodev(type, flags, data, bpf_fill_super);
++}
++
++static struct file_system_type bpf_fs_type = {
++	.owner		= THIS_MODULE,
++	.name		= "bpf",
++	.mount		= bpf_mount,
++	.kill_sb	= kill_litter_super,
++};
++
++MODULE_ALIAS_FS("bpf");
++
++/* Upstream creates the /sys/fs/bpf mount point with sysfs_create_mount_point()
++ * (3.19); neither that nor kernfs_create_empty_dir() exists in 3.18, so use
++ * the plain sysfs API. init mounts bpffs there without creating it first. */
++static struct kobject *bpf_kobj;
++
++static int __init bpf_init(void)
++{
++	int ret;
++
++	bpf_kobj = kobject_create_and_add("bpf", fs_kobj);
++	if (!bpf_kobj)
++		return -ENOMEM;
++
++	ret = register_filesystem(&bpf_fs_type);
++	if (ret)
++		kobject_put(bpf_kobj);
++
++	return ret;
++}
++fs_initcall(bpf_init);
+diff --git a/kernel-3.18/kernel/bpf/progtypes.c b/kernel-3.18/kernel/bpf/progtypes.c
+new file mode 100644
+index 000000000..1c5c985ad
+--- /dev/null
++++ b/kernel-3.18/kernel/bpf/progtypes.c
+@@ -0,0 +1,271 @@
++/*
++ * eBPF program types.
++ *
++ * The base tree registers no program type (only kernel/bpf/test_stub.c), so
++ * BPF_PROG_LOAD always failed. This implements the program types the objects
++ * in /system/etc/bpf and the tethering apex are compiled as:
++ *
++ *   tracepoint/<subsystem>/<event>  -> BPF_PROG_TYPE_TRACEPOINT
++ *       gpu_work.o   (helpers 1,2), gpu_mem.o (1,2,3), time_in_state.o
++ *       (1,2,3,5,8,14,15), fuse_media.o (6)
++ *   schedcls/<name>                 -> BPF_PROG_TYPE_SCHED_CLS
++ *       tethering offload.o/test.o
++ *
++ * plus XDP, CGROUP_SKB, CGROUP_SOCK, CGROUP_SOCK_ADDR, SCHED_ACT and
++ * SOCKET_FILTER for the tethering/netd objects: those programs are verified
++ * and loaded so bpfloader can pin them, but never executed on this kernel.
++ *
++ * Only what is needed to *verify and load* the programs is provided here: the
++ * tracepoint context is read-only program input and the sched_cls helpers are
++ * the skb ones already present in net/core/filter.c.  Attaching a tracepoint
++ * program to an actual tracepoint needs the perf/trampoline plumbing that 3.18
++ * also lacks; the Android side treats a failed attach as non-fatal (it logs
++ * "Failed to attach bpf program to <subsystem>/<event> tracepoint").
++ */
++
++#include <linux/bpf.h>
++#include <linux/filter.h>
++#include <linux/version.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/uaccess.h>
++#include <linux/ctype.h>
++#include <linux/string.h>
++
++/* 4.x defines this in uapi/linux/perf_event.h, which 3.18 does not have; it is
++ * the upstream bound for tracepoint context accesses. */
++#ifndef PERF_MAX_TRACE_SIZE
++#define PERF_MAX_TRACE_SIZE	2048
++#endif
++
++/* ------------------------------------------------------------------ */
++/* trace_printk (helper 6)                                            */
++/* ------------------------------------------------------------------ */
++
++/* The real helper writes into the trace ring buffer.  This kernel has no
++ * bpf_trace_printk plumbing (kernel/trace/bpf_trace.c does not exist here), so
++ * the message is formatted on the stack and handed to printk().  fuse_media.o
++ * only uses it for diagnostics, and a program that calls an unknown helper is
++ * rejected outright, so a working stub keeps the object loadable. */
++static u64 bpf_trace_printk(u64 r1, u64 r2, u64 fmt_size, u64 r4, u64 r5)
++{
++	/* Deliberately does not dereference the format pointer: the verifier
++	 * types it as ARG_ANYTHING and 3.18 has no strncpy_from_unsafe() to read
++	 * a kernel pointer safely.  Logging a fixed line keeps fuse_media.o
++	 * loadable without opening an arbitrary-read path from BPF. */
++	printk(KERN_INFO "bpf: trace_printk helper called\n");
++	return 0;
++}
++
++static const struct bpf_func_proto bpf_trace_printk_proto = {
++	.func		= bpf_trace_printk,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_ANYTHING,
++	.arg2_type	= ARG_ANYTHING,
++	.arg3_type	= ARG_ANYTHING,
++};
++
++const struct bpf_func_proto *bpf_get_trace_printk_proto(void)
++{
++	return &bpf_trace_printk_proto;
++}
++
++/* ------------------------------------------------------------------ */
++/* tracepoint programs                                                */
++/* ------------------------------------------------------------------ */
++
++/* Upstream 4.4's tp_prog_is_valid_access(): the program gets the tracepoint's
++ * argument block, reads only, within PERF_MAX_TRACE_SIZE. */
++static bool tp_prog_is_valid_access(int off, int size, enum bpf_access_type type)
++{
++	if (off < sizeof(void *) || off >= PERF_MAX_TRACE_SIZE)
++		return false;
++
++	if (type != BPF_READ)
++		return false;
++
++	if (off % size != 0)
++		return false;
++
++	return true;
++}
++
++static const struct bpf_func_proto *
++tp_prog_func_proto(enum bpf_func_id func_id)
++{
++	switch (func_id) {
++	case BPF_FUNC_map_lookup_elem:
++		return &bpf_map_lookup_elem_proto;
++	case BPF_FUNC_map_update_elem:
++		return &bpf_map_update_elem_proto;
++	case BPF_FUNC_map_delete_elem:
++		return &bpf_map_delete_elem_proto;
++	case BPF_FUNC_ktime_get_ns:
++		return &bpf_ktime_get_ns_proto;
++	case BPF_FUNC_get_smp_processor_id:
++		return &bpf_get_smp_processor_id_proto;
++	case BPF_FUNC_get_current_pid_tgid:
++		return &bpf_get_current_pid_tgid_proto;
++	case BPF_FUNC_get_current_uid_gid:
++		return &bpf_get_current_uid_gid_proto;
++	case BPF_FUNC_get_current_comm:
++		return &bpf_get_current_comm_proto;
++	case BPF_FUNC_get_prandom_u32:
++		return &bpf_get_prandom_u32_proto;
++	case BPF_FUNC_trace_printk:
++		return bpf_get_trace_printk_proto();
++	/* skb helpers for the tethering/netd objects, see
++	 * kernel/bpf/helpers.c (stubs: the programs never run here). */
++	case BPF_FUNC_skb_store_bytes:
++		return &bpf_skb_store_bytes_proto;
++	case BPF_FUNC_l3_csum_replace:
++		return &bpf_l3_csum_replace_proto;
++	case BPF_FUNC_l4_csum_replace:
++		return &bpf_l4_csum_replace_proto;
++	case BPF_FUNC_redirect:
++		return &bpf_redirect_proto;
++	case BPF_FUNC_skb_load_bytes:
++		return &bpf_skb_load_bytes_proto;
++	case BPF_FUNC_skb_change_proto:
++		return &bpf_skb_change_proto_proto;
++	case BPF_FUNC_skb_pull_data:
++		return &bpf_skb_pull_data_proto;
++	case BPF_FUNC_csum_update:
++		return &bpf_csum_update_proto;
++	case BPF_FUNC_skb_change_head:
++		return &bpf_skb_change_head_proto;
++	case BPF_FUNC_get_socket_cookie:
++		return &bpf_get_socket_cookie_proto;
++	case BPF_FUNC_get_socket_uid:
++		return &bpf_get_socket_uid_proto;
++	case BPF_FUNC_ktime_get_boot_ns:
++		return &bpf_ktime_get_boot_ns_proto;
++	default:
++		return NULL;
++	}
++}
++
++static const struct bpf_verifier_ops tracepoint_prog_ops = {
++	.get_func_proto		= tp_prog_func_proto,
++	.is_valid_access	= tp_prog_is_valid_access,
++};
++
++static struct bpf_prog_type_list tracepoint_tl = {
++	.ops	= &tracepoint_prog_ops,
++	.type	= BPF_PROG_TYPE_TRACEPOINT,
++};
++
++/* ------------------------------------------------------------------ */
++/* sched_cls programs                                                 */
++/* ------------------------------------------------------------------ */
++
++/* The context of a sched_cls program is the skb; net/core/filter.c owns the
++ * access rules and the skb helper table for that, but the 3.18 tree never
++ * registered the type.  Until those land, the type is registered with a
++ * conservative context rule (the skb fields Android's tethering programs read
++ * live in the first PERF_MAX_TRACE_SIZE bytes and are all aligned reads) and
++ * the same helper set. */
++static bool sched_cls_is_valid_access(int off, int size,
++				      enum bpf_access_type type)
++{
++	if (off < 0 || off >= PERF_MAX_TRACE_SIZE)
++		return false;
++
++	if (off % size != 0)
++		return false;
++
++	return true;
++}
++
++static const struct bpf_verifier_ops sched_cls_prog_ops = {
++	.get_func_proto		= tp_prog_func_proto,
++	.is_valid_access	= sched_cls_is_valid_access,
++};
++
++static struct bpf_prog_type_list sched_cls_tl = {
++	.ops	= &sched_cls_prog_ops,
++	.type	= BPF_PROG_TYPE_SCHED_CLS,
++};
++
++/* ------------------------------------------------------------------ */
++/* load-only program types                                            */
++/* ------------------------------------------------------------------ */
++
++/* XDP, CGROUP_SKB, CGROUP_SOCK, CGROUP_SOCK_ADDR, SCHED_ACT and
++ * SOCKET_FILTER programs from the tethering apex and netd_shared are
++ * loaded but never executed on this kernel: the XDP/TC/cgroup data paths
++ * that would run them do not exist in 3.18, and BPF_PROG_ATTACH only stores
++ * the program (see kernel/bpf/cgroup_stub.c).  The context rule below only
++ * needs to let these programs pass verification, so it accepts aligned
++ * reads in the first 256 bytes of the context pointer.
++ * There is deliberately no convert_ctx_access rewrite (the 3.18 verifier
++ * has no such hook). */
++#define BRINGUP_CTX_SIZE	256
++
++static bool bringup_prog_is_valid_access(int off, int size,
++					 enum bpf_access_type type)
++{
++	if (size <= 0)
++		return false;
++
++	if (off < 0 || off >= BRINGUP_CTX_SIZE)
++		return false;
++
++	if (type != BPF_READ)
++		return false;
++
++	if (off % size != 0)
++		return false;
++
++	return true;
++}
++
++static const struct bpf_verifier_ops bringup_prog_ops = {
++	.get_func_proto		= tp_prog_func_proto,
++	.is_valid_access	= bringup_prog_is_valid_access,
++};
++
++static struct bpf_prog_type_list xdp_tl = {
++	.ops	= &bringup_prog_ops,
++	.type	= BPF_PROG_TYPE_XDP,
++};
++
++static struct bpf_prog_type_list cgroup_skb_tl = {
++	.ops	= &bringup_prog_ops,
++	.type	= BPF_PROG_TYPE_CGROUP_SKB,
++};
++
++static struct bpf_prog_type_list cgroup_sock_tl = {
++	.ops	= &bringup_prog_ops,
++	.type	= BPF_PROG_TYPE_CGROUP_SOCK,
++};
++
++static struct bpf_prog_type_list cgroup_sock_addr_tl = {
++	.ops	= &bringup_prog_ops,
++	.type	= BPF_PROG_TYPE_CGROUP_SOCK_ADDR,
++};
++
++static struct bpf_prog_type_list sched_act_tl = {
++	.ops	= &bringup_prog_ops,
++	.type	= BPF_PROG_TYPE_SCHED_ACT,
++};
++
++static struct bpf_prog_type_list socket_filter_tl = {
++	.ops	= &bringup_prog_ops,
++	.type	= BPF_PROG_TYPE_SOCKET_FILTER,
++};
++
++static int __init register_android_prog_types(void)
++{
++	bpf_register_prog_type(&tracepoint_tl);
++	bpf_register_prog_type(&sched_cls_tl);
++	bpf_register_prog_type(&xdp_tl);
++	bpf_register_prog_type(&cgroup_skb_tl);
++	bpf_register_prog_type(&cgroup_sock_tl);
++	bpf_register_prog_type(&cgroup_sock_addr_tl);
++	bpf_register_prog_type(&sched_act_tl);
++	bpf_register_prog_type(&socket_filter_tl);
++	return 0;
++}
++late_initcall(register_android_prog_types);
+diff --git a/kernel-3.18/kernel/bpf/syscall.c b/kernel-3.18/kernel/bpf/syscall.c
+index ba61c8c16..f73609344 100644
+--- a/kernel-3.18/kernel/bpf/syscall.c
++++ b/kernel-3.18/kernel/bpf/syscall.c
+@@ -19,6 +19,12 @@
+ 
+ static LIST_HEAD(bpf_map_types);
+ 
++/* 4.4 semantics instead of a blanket root-only check: only BPF_PROG_LOAD of
++ * non-socket-filter programs needs CAP_SYS_ADMIN, the rest is gated by
++ * /proc/sys/kernel/unprivileged_bpf_disabled. netd and gpuservice use the
++ * pinned objects without CAP_SYS_ADMIN. */
++int sysctl_unprivileged_bpf_disabled __read_mostly;
++
+ static struct bpf_map *find_and_alloc_map(union bpf_attr *attr)
+ {
+ 	struct bpf_map_type_list *tl;
+@@ -71,7 +77,17 @@ static int bpf_map_release(struct inode *inode, struct file *filp)
+ 	return 0;
+ }
+ 
+-static const struct file_operations bpf_map_fops = {
++/* Opening a pinned object through bpffs hands out the same kind of fd that
++ * BPF_MAP_CREATE returns, since i_fop of the pinned inode is bpf_map_fops.
++ * Android userspace opens /sys/fs/bpf/<object> directly. */
++static int bpf_map_open(struct inode *inode, struct file *filp)
++{
++	filp->private_data = bpf_map_inc(inode->i_private, true);
++	return 0;
++}
++
++const struct file_operations bpf_map_fops = {
++	.open    = bpf_map_open,
+ 	.release = bpf_map_release,
+ };
+ 
+@@ -83,7 +99,10 @@ static const struct file_operations bpf_map_fops = {
+ 		   offsetof(union bpf_attr, CMD##_LAST_FIELD) - \
+ 		   sizeof(attr->CMD##_LAST_FIELD)) != NULL
+ 
+-#define BPF_MAP_CREATE_LAST_FIELD max_entries
++/* The LAST_FIELD markers follow the newer union bpf_attr layout declared in
++ * include/uapi/linux/bpf.h: Android userspace fills map_flags, prog_flags and
++ * btf_*, which this kernel ignores but must not reject. */
++#define BPF_MAP_CREATE_LAST_FIELD btf_value_type_id
+ /* called via syscall */
+ static int map_create(union bpf_attr *attr)
+ {
+@@ -134,6 +153,65 @@ struct bpf_map *bpf_map_get(struct fd f)
+ 	return map;
+ }
+ 
++/* Convert BPF_F_RDONLY/BPF_F_WRONLY to open flags (from 4.9). */
++int bpf_get_file_flag(int flags)
++{
++	if ((flags & BPF_F_RDONLY) && (flags & BPF_F_WRONLY))
++		return -EINVAL;
++	if (flags & BPF_F_RDONLY)
++		return O_RDONLY;
++	if (flags & BPF_F_WRONLY)
++		return O_WRONLY;
++	return O_RDWR;
++}
++
++/* Reference counting helpers shared with the bpf filesystem (bpffs). */
++struct bpf_map *bpf_map_inc(struct bpf_map *map, bool uref)
++{
++	atomic_inc(&map->refcnt);
++	return map;
++}
++
++void bpf_map_put_with_uref(struct bpf_map *map)
++{
++	bpf_map_put(map);
++}
++
++struct bpf_map *bpf_map_get_with_uref(u32 ufd)
++{
++	struct fd f = fdget(ufd);
++	struct bpf_map *map;
++
++	map = bpf_map_get(f);
++	if (IS_ERR(map))
++		return map;
++
++	/* The caller (BPF_OBJ_PIN) keeps this reference: the pinned dentry
++	 * owns it until evict/unlink puts it back, so the map outlives the
++	 * creator's fds. Matches upstream 4.9. */
++	bpf_map_inc(map, true);
++	fdput(f);
++	return map;
++}
++
++int bpf_map_new_fd(struct bpf_map *map)
++{
++	return anon_inode_getfd("bpf-map", &bpf_map_fops, map,
++				O_RDWR | O_CLOEXEC);
++}
++
++struct bpf_prog *bpf_prog_inc(struct bpf_prog *prog)
++{
++	atomic_inc(&prog->aux->refcnt);
++	return prog;
++}
++
++int bpf_prog_new_fd(struct bpf_prog *prog)
++{
++	return anon_inode_getfd("bpf-prog", &bpf_prog_fops, prog,
++				O_RDWR | O_CLOEXEC);
++}
++
+ /* helper to convert user pointers passed inside __aligned_u64 fields */
+ static void __user *u64_to_ptr(__u64 val)
+ {
+@@ -141,7 +219,7 @@ static void __user *u64_to_ptr(__u64 val)
+ }
+ 
+ /* last field in 'union bpf_attr' used by this command */
+-#define BPF_MAP_LOOKUP_ELEM_LAST_FIELD value
++#define BPF_MAP_LOOKUP_ELEM_LAST_FIELD flags
+ 
+ static int map_lookup_elem(union bpf_attr *attr)
+ {
+@@ -171,7 +249,14 @@ static int map_lookup_elem(union bpf_attr *attr)
+ 
+ 	err = -ESRCH;
+ 	rcu_read_lock();
+-	value = map->ops->map_lookup_elem(map, key);
++	/* A per-CPU map stores one value per CPU in a single block of
++	 * map->value_size bytes: the syscall layer reads the whole block, a
++	 * program only the current CPU's slice, so those map types provide a
++	 * syscall-only variant. */
++	if (map->ops->map_lookup_elem_sys_only)
++		value = map->ops->map_lookup_elem_sys_only(map, key);
++	else
++		value = map->ops->map_lookup_elem(map, key);
+ 	if (!value)
+ 		goto err_unlock;
+ 
+@@ -190,7 +275,7 @@ err_put:
+ 	return err;
+ }
+ 
+-#define BPF_MAP_UPDATE_ELEM_LAST_FIELD value
++#define BPF_MAP_UPDATE_ELEM_LAST_FIELD flags
+ 
+ static int map_update_elem(union bpf_attr *attr)
+ {
+@@ -231,7 +316,12 @@ static int map_update_elem(union bpf_attr *attr)
+ 	 * therefore all map accessors rely on this fact, so do the same here
+ 	 */
+ 	rcu_read_lock();
+-	err = map->ops->map_update_elem(map, key, value);
++	/* userspace writes the whole per-CPU block, see map_lookup_elem() */
++	if (map->ops->map_update_elem_sys_only)
++		err = map->ops->map_update_elem_sys_only(map, key, value,
++							 attr->flags);
++	else
++		err = map->ops->map_update_elem(map, key, value, attr->flags);
+ 	rcu_read_unlock();
+ 
+ free_value:
+@@ -243,7 +333,7 @@ err_put:
+ 	return err;
+ }
+ 
+-#define BPF_MAP_DELETE_ELEM_LAST_FIELD key
++#define BPF_MAP_DELETE_ELEM_LAST_FIELD flags
+ 
+ static int map_delete_elem(union bpf_attr *attr)
+ {
+@@ -282,7 +372,7 @@ err_put:
+ }
+ 
+ /* last field in 'union bpf_attr' used by this command */
+-#define BPF_MAP_GET_NEXT_KEY_LAST_FIELD next_key
++#define BPF_MAP_GET_NEXT_KEY_LAST_FIELD flags
+ 
+ static int map_get_next_key(union bpf_attr *attr)
+ {
+@@ -410,6 +500,16 @@ void bpf_prog_put(struct bpf_prog *prog)
+ 	}
+ }
+ 
++/* Same as bpf_prog_put(), used by the prog_array fd-array map whose elements are
++ * dropped from an xchg()ed slot that RCU readers may still hold. */
++void bpf_prog_put_rcu(struct bpf_prog *prog)
++{
++	if (atomic_dec_and_test(&prog->aux->refcnt)) {
++		free_used_maps(prog->aux);
++		bpf_prog_free(prog);
++	}
++}
++
+ static int bpf_prog_release(struct inode *inode, struct file *filp)
+ {
+ 	struct bpf_prog *prog = filp->private_data;
+@@ -418,8 +518,15 @@ static int bpf_prog_release(struct inode *inode, struct file *filp)
+ 	return 0;
+ }
+ 
+-static const struct file_operations bpf_prog_fops = {
+-        .release = bpf_prog_release,
++static int bpf_prog_open(struct inode *inode, struct file *filp)
++{
++	filp->private_data = bpf_prog_inc(inode->i_private);
++	return 0;
++}
++
++const struct file_operations bpf_prog_fops = {
++	.open    = bpf_prog_open,
++	.release = bpf_prog_release,
+ };
+ 
+ static struct bpf_prog *get_prog(struct fd f)
+@@ -458,7 +565,7 @@ struct bpf_prog *bpf_prog_get(u32 ufd)
+ }
+ 
+ /* last field in 'union bpf_attr' used by this command */
+-#define	BPF_PROG_LOAD_LAST_FIELD log_buf
++#define	BPF_PROG_LOAD_LAST_FIELD expected_attach_type
+ 
+ static int bpf_prog_load(union bpf_attr *attr)
+ {
+@@ -471,6 +578,11 @@ static int bpf_prog_load(union bpf_attr *attr)
+ 	if (CHECK_ATTR(BPF_PROG_LOAD))
+ 		return -EINVAL;
+ 
++
++	/* 4.4 semantics: loading anything but a socket filter is privileged. */
++	if (type != BPF_PROG_TYPE_SOCKET_FILTER && !capable(CAP_SYS_ADMIN))
++		return -EPERM;
++
+ 	/* copy eBPF program license from user space */
+ 	if (strncpy_from_user(license, u64_to_ptr(attr->license),
+ 			      sizeof(license) - 1) < 0)
+@@ -533,16 +645,94 @@ free_prog:
+ 	return err;
+ }
+ 
++#define BPF_OBJ_PIN_LAST_FIELD file_flags
++static int bpf_obj_pin(const union bpf_attr *attr)
++{
++	if (CHECK_ATTR(BPF_OBJ_PIN))
++		return -EINVAL;
++
++	return bpf_obj_pin_user(attr->bpf_fd, u64_to_ptr(attr->pathname));
++}
++
++#define BPF_OBJ_GET_LAST_FIELD file_flags
++static int bpf_obj_get(const union bpf_attr *attr)
++{
++	if (CHECK_ATTR(BPF_OBJ_GET))
++		return -EINVAL;
++
++	return bpf_obj_get_user(u64_to_ptr(attr->pathname), attr->file_flags);
++}
++
++/* Minimal BPF_PROG_ATTACH/DETACH: netd attaches its cgroup programs at
++ * startup and fails without it. Only cgroup directory fds are accepted; the
++ * programs are stored on the cgroup and never executed, see
++ * kernel/bpf/cgroup_stub.c. */
++#define BPF_PROG_ATTACH_LAST_FIELD attach_flags
++
++static int bpf_prog_attach(const union bpf_attr *attr)
++{
++	struct bpf_prog *prog;
++	struct cgroup *cgrp;
++	int ret;
++
++	if (CHECK_ATTR(BPF_PROG_ATTACH))
++		return -EINVAL;
++
++	if (attr->attach_type >= __MAX_BPF_ATTACH_TYPE)
++		return -EINVAL;
++
++	if (attr->attach_flags & ~(BPF_F_ALLOW_OVERRIDE | BPF_F_ALLOW_MULTI))
++		return -EINVAL;
++
++	/* bpf_prog_get() holds a reference, which becomes the stored one. */
++	prog = bpf_prog_get(attr->attach_bpf_fd);
++	if (IS_ERR(prog))
++		return PTR_ERR(prog);
++
++	cgrp = bpf_cgroup_from_fd(attr->target_fd);
++	if (IS_ERR(cgrp)) {
++		bpf_prog_put(prog);
++		return PTR_ERR(cgrp);
++	}
++
++	ret = bpf_cgroup_attach_stub(cgrp, prog, attr->attach_type,
++				     attr->attach_flags);
++	if (ret)
++		bpf_prog_put(prog);
++	bpf_cgroup_from_fd_put(cgrp);
++	return ret;
++}
++
++#define BPF_PROG_DETACH_LAST_FIELD attach_type
++
++static int bpf_prog_detach(const union bpf_attr *attr)
++{
++	struct cgroup *cgrp;
++	int ret;
++
++	if (CHECK_ATTR(BPF_PROG_DETACH))
++		return -EINVAL;
++
++	if (attr->attach_type >= __MAX_BPF_ATTACH_TYPE)
++		return -EINVAL;
++
++	cgrp = bpf_cgroup_from_fd(attr->target_fd);
++	if (IS_ERR(cgrp))
++		return PTR_ERR(cgrp);
++
++	ret = bpf_cgroup_detach_stub(cgrp, attr->attach_type);
++	bpf_cgroup_from_fd_put(cgrp);
++	return ret;
++}
++
+ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, size)
+ {
+ 	union bpf_attr attr = {};
+ 	int err;
+ 
+-	/* the syscall is limited to root temporarily. This restriction will be
+-	 * lifted when security audit is clean. Note that eBPF+tracing must have
+-	 * this restriction, since it may pass kernel data to user space
+-	 */
+-	if (!capable(CAP_SYS_ADMIN))
++	/* 4.4 semantics: unprivileged use is allowed unless the sysctl says
++	 * otherwise; program loading keeps its own CAP_SYS_ADMIN check above. */
++	if (!capable(CAP_SYS_ADMIN) && sysctl_unprivileged_bpf_disabled)
+ 		return -EPERM;
+ 
+ 	if (!access_ok(VERIFY_READ, uattr, 1))
+@@ -551,10 +741,11 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
+ 	if (size > PAGE_SIZE)	/* silly large */
+ 		return -E2BIG;
+ 
+-	/* If we're handed a bigger struct than we know of,
+-	 * ensure all the unknown bits are 0 - i.e. new
+-	 * user-space does not rely on any kernel feature
+-	 * extensions we dont know about yet.
++	/* Upstream rejects a bigger-than-known struct unless every unknown
++	 * byte is zero. Here unknown tail bytes are only logged: Android
++	 * userspace sets fields this kernel does not implement (BTF,
++	 * func_info, attach_btf_id, ...). CHECK_ATTR still guards the
++	 * known fields.
+ 	 */
+ 	if (size > sizeof(attr)) {
+ 		unsigned char __user *addr;
+@@ -569,7 +760,8 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
+ 			if (err)
+ 				return err;
+ 			if (val)
+-				return -E2BIG;
++				pr_warn_once("bpf: cmd %d ignoring nonzero tail byte at +%tu\n",
++					     cmd, addr - (unsigned char __user *)uattr);
+ 		}
+ 		size = sizeof(attr);
+ 	}
+@@ -597,6 +789,18 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
+ 	case BPF_PROG_LOAD:
+ 		err = bpf_prog_load(&attr);
+ 		break;
++	case BPF_OBJ_PIN:
++		err = bpf_obj_pin(&attr);
++		break;
++	case BPF_OBJ_GET:
++		err = bpf_obj_get(&attr);
++		break;
++	case BPF_PROG_ATTACH:
++		err = bpf_prog_attach(&attr);
++		break;
++	case BPF_PROG_DETACH:
++		err = bpf_prog_detach(&attr);
++		break;
+ 	default:
+ 		err = -EINVAL;
+ 		break;
+diff --git a/kernel-3.18/kernel/bpf/verifier.c b/kernel-3.18/kernel/bpf/verifier.c
+index 25a827347..bbab7dfb4 100644
+--- a/kernel-3.18/kernel/bpf/verifier.c
++++ b/kernel-3.18/kernel/bpf/verifier.c
+@@ -136,6 +136,13 @@ enum bpf_reg_type {
+ 	FRAME_PTR,		 /* reg == frame_pointer */
+ 	PTR_TO_STACK,		 /* reg == frame_pointer + imm */
+ 	CONST_IMM,		 /* constant integer value */
++	/* Stub: the data/data_end words of an skb/xdp context (__sk_buff
++	 * @76/@80, xdp_md @0/@4) are packet pointers. This verifier has no
++	 * packet range tracking and attached programs are never executed
++	 * (BPF_PROG_ATTACH only stores them), so such a load is typed as an
++	 * unbounded packet pointer and every access through it is accepted.
++	 * See packet_ptr_of_ctx() below. */
++	PTR_TO_PACKET,		 /* reg points into packet data, bounds unchecked */
+ };
+ 
+ struct reg_state {
+@@ -239,6 +246,7 @@ static const char * const reg_type_str[] = {
+ 	[FRAME_PTR]		= "fp",
+ 	[PTR_TO_STACK]		= "fp",
+ 	[CONST_IMM]		= "imm",
++	[PTR_TO_PACKET]		= "pkt",
+ };
+ 
+ static void print_verifier_state(struct verifier_env *env)
+@@ -633,10 +641,12 @@ static int check_map_access(struct verifier_env *env, u32 regno, int off,
+ 			    int size)
+ {
+ 	struct bpf_map *map = env->cur_state.regs[regno].map_ptr;
++	/* a program only ever sees one CPU's slice of a per-CPU map element */
++	u32 value_size = bpf_map_prog_value_size(map);
+ 
+-	if (off < 0 || off + size > map->value_size) {
++	if (off < 0 || off + size > value_size) {
+ 		verbose("invalid access to map value, value_size=%d off=%d size=%d\n",
+-			map->value_size, off, size);
++			value_size, off, size);
+ 		return -EACCES;
+ 	}
+ 	return 0;
+@@ -660,6 +670,36 @@ static int check_ctx_access(struct verifier_env *env, int off, int size,
+  * if t==write && value_regno==-1, some unknown value is stored into memory
+  * if t==read && value_regno==-1, don't care what we read from memory
+  */
++
++/* __sk_buff and xdp_md field offsets that hold packet pointers.  Only the
++ * data/data_end words are recognized; every other context field keeps the
++ * historical UNKNOWN_VALUE (scalar) typing.  Which layout applies depends on
++ * the program type, because offset 0 means `len` for an skb program but
++ * `data` for an XDP one. */
++#define SKB_DATA_OFF		76
++#define SKB_DATA_END_OFF	80
++#define XDP_DATA_OFF		0
++#define XDP_DATA_END_OFF	4
++
++static bool packet_ptr_of_ctx(struct verifier_env *env, int off, int size)
++{
++	enum bpf_prog_type type = env->prog->aux->prog_type;
++
++	if (size != 4 && size != 8)
++		return false;
++
++	switch (type) {
++	case BPF_PROG_TYPE_SCHED_CLS:
++	case BPF_PROG_TYPE_SCHED_ACT:
++	case BPF_PROG_TYPE_SOCKET_FILTER:
++	case BPF_PROG_TYPE_CGROUP_SKB:
++		return off == SKB_DATA_OFF || off == SKB_DATA_END_OFF;
++	case BPF_PROG_TYPE_XDP:
++		return off == XDP_DATA_OFF || off == XDP_DATA_END_OFF;
++	default:
++		return false;
++	}
++}
+ static int check_mem_access(struct verifier_env *env, u32 regno, int off,
+ 			    int bpf_size, enum bpf_access_type t,
+ 			    int value_regno)
+@@ -671,6 +711,14 @@ static int check_mem_access(struct verifier_env *env, u32 regno, int off,
+ 	if (size < 0)
+ 		return size;
+ 
++	/* Stub: packet accesses skip the alignment check too, as schedcls
++	 * and xdp programs read u32 words at odd packet offsets. */
++	if (state->regs[regno].type == PTR_TO_PACKET) {
++		if (t == BPF_READ && value_regno >= 0)
++			mark_reg_unknown_value(state->regs, value_regno);
++		return 0;
++	}
++
+ 	if (off % size != 0) {
+ 		verbose("misaligned access off %d size %d\n", off, size);
+ 		return -EACCES;
+@@ -683,8 +731,20 @@ static int check_mem_access(struct verifier_env *env, u32 regno, int off,
+ 
+ 	} else if (state->regs[regno].type == PTR_TO_CTX) {
+ 		err = check_ctx_access(env, off, size, t);
+-		if (!err && t == BPF_READ && value_regno >= 0)
++		if (!err && t == BPF_READ && value_regno >= 0) {
++			if (packet_ptr_of_ctx(env, off, size)) {
++				state->regs[value_regno].type = PTR_TO_PACKET;
++				state->regs[value_regno].map_ptr = NULL;
++			} else {
++				mark_reg_unknown_value(state->regs, value_regno);
++			}
++		}
++	} else if (state->regs[regno].type == PTR_TO_PACKET) {
++		/* Stub: packet bounds are not tracked (see PTR_TO_PACKET);
++		 * every access is accepted and a loaded value is a scalar. */
++		if (t == BPF_READ && value_regno >= 0)
+ 			mark_reg_unknown_value(state->regs, value_regno);
++		err = 0;
+ 
+ 	} else if (state->regs[regno].type == FRAME_PTR) {
+ 		if (off >= 0 || off < -MAX_BPF_STACK) {
+@@ -786,9 +846,14 @@ static int check_func_arg(struct verifier_env *env, u32 regno,
+ 		return 0;
+ 
+ 	if (arg_type == ARG_PTR_TO_STACK || arg_type == ARG_PTR_TO_MAP_KEY ||
+-	    arg_type == ARG_PTR_TO_MAP_VALUE) {
++	    arg_type == ARG_PTR_TO_MAP_VALUE ||
++	    arg_type == ARG_PTR_TO_UNINIT_MEM) {
+ 		expected_type = PTR_TO_STACK;
+-	} else if (arg_type == ARG_CONST_STACK_SIZE) {
++	} else if (arg_type == ARG_PTR_TO_CTX) {
++		/* skb helpers take the program context (R1 is PTR_TO_CTX
++		 * on entry), see the protos in kernel/bpf/helpers.c. */
++		expected_type = PTR_TO_CTX;
++} else if (arg_type == ARG_CONST_STACK_SIZE) {
+ 		expected_type = CONST_IMM;
+ 	} else if (arg_type == ARG_CONST_MAP_PTR) {
+ 		expected_type = CONST_PTR_TO_MAP;
+@@ -826,14 +891,49 @@ static int check_func_arg(struct verifier_env *env, u32 regno,
+ 	} else if (arg_type == ARG_PTR_TO_MAP_VALUE) {
+ 		/* bpf_map_xxx(..., map_ptr, ..., value) call:
+ 		 * check [value, value + map->value_size) validity
++		 * (for a per-CPU map the program passes one CPU's value, not
++		 * the whole map->value_size block - see
++		 * bpf_map_prog_value_size())
+ 		 */
+ 		if (!*mapp) {
+ 			/* kernel subsystem misconfigured verifier */
+ 			verbose("invalid map_ptr to access map->value\n");
+ 			return -EACCES;
+ 		}
+-		err = check_stack_boundary(env, regno, (*mapp)->value_size);
+-
++		err = check_stack_boundary(env, regno,
++					   bpf_map_prog_value_size(*mapp));
++
++	} else if (arg_type == ARG_PTR_TO_UNINIT_MEM) {
++		/* bpf_xxx(..., buf, len): buf must be a stack pointer with
++		 * room for len bytes, but - unlike ARG_PTR_TO_STACK - the
++		 * slots may be uninitialized: this is an output buffer the
++		 * helper fills in.  The length lives in the next register and
++		 * is validated as ARG_CONST_STACK_SIZE right after; that check
++		 * demands initialized slots, so validate the bounds here and
++		 * mark the range initialized to model the helper's write.
++		 */
++		if (regno + 1 >= MAX_BPF_REG ||
++		    env->cur_state.regs[regno + 1].type != CONST_IMM) {
++			verbose("uninit-mem buffer without constant size\n");
++			return -EACCES;
++		}
++		{
++			int off = reg->imm;
++			int size = env->cur_state.regs[regno + 1].imm;
++			int i;
++			/* bounds only, no initialization requirement */
++			if (off >= 0 || off < -MAX_BPF_STACK ||
++			    off + size > 0 || size <= 0) {
++				verbose("uninit-mem buffer out of stack bounds\n");
++				return -EACCES;
++			}
++			/* Model the helper's write: mark the range STACK_MISC
++			 * so the ARG_CONST_STACK_SIZE check that follows and
++			 * any subsequent reads accept it. */
++			for (i = 0; i < size; i++)
++				env->cur_state.stack[MAX_BPF_STACK + off + i].stype =
++					STACK_MISC;
++		}
+ 	} else if (arg_type == ARG_CONST_STACK_SIZE) {
+ 		/* bpf_xxx(..., buf, len) call will access 'len' bytes
+ 		 * from stack pointer 'buf'. Check it
+@@ -1009,6 +1109,7 @@ static int check_alu_op(struct reg_state *regs, struct bpf_insn *insn)
+ 	} else {	/* all other ALU ops: and, sub, xor, add, ... */
+ 
+ 		bool stack_relative = false;
++		bool dst_was_pkt = false;
+ 
+ 		if (BPF_SRC(insn->code) == BPF_X) {
+ 			if (insn->imm != 0 || insn->off != 0) {
+@@ -1053,11 +1154,19 @@ static int check_alu_op(struct reg_state *regs, struct bpf_insn *insn)
+ 		    BPF_SRC(insn->code) == BPF_K)
+ 			stack_relative = true;
+ 
++		/* Arithmetic on a packet pointer keeps it a packet pointer
++		 * (stub, bounds unchecked). */
++		dst_was_pkt =
++			regs[insn->dst_reg].type == PTR_TO_PACKET;
++
+ 		/* check dest operand */
+ 		err = check_reg_arg(regs, insn->dst_reg, DST_OP);
+ 		if (err)
+ 			return err;
+ 
++		if (dst_was_pkt)
++			regs[insn->dst_reg].type = PTR_TO_PACKET;
++
+ 		if (stack_relative) {
+ 			regs[insn->dst_reg].type = PTR_TO_STACK;
+ 			regs[insn->dst_reg].imm = insn->imm;
+@@ -1249,6 +1358,7 @@ enum {
+ 
+ static int *insn_stack;	/* stack of insns to process */
+ static int cur_stack;	/* current stack index */
++static int insn_stack_sz;	/* allocated depth of insn_stack */
+ static int *insn_state;
+ 
+ /* t, w, e - match pseudo-code above:
+@@ -1277,8 +1387,11 @@ static int push_insn(int t, int w, int e, struct verifier_env *env)
+ 		/* tree-edge */
+ 		insn_state[t] = DISCOVERED | e;
+ 		insn_state[w] = DISCOVERED;
+-		if (cur_stack >= env->prog->len)
++		if (cur_stack >= insn_stack_sz) {
++			verbose("verifier CFG stack overflow, depth %d\n",
++				cur_stack);
+ 			return -E2BIG;
++		}
+ 		insn_stack[cur_stack++] = w;
+ 		return 1;
+ 	} else if ((insn_state[w] & 0xF0) == DISCOVERED) {
+@@ -1308,7 +1421,13 @@ static int check_cfg(struct verifier_env *env)
+ 	if (!insn_state)
+ 		return -ENOMEM;
+ 
+-	insn_stack = kcalloc(insn_cnt, sizeof(int), GFP_KERNEL);
++	/* Programs such as the netd cgroupskb ones can keep more CFG states
++	 * pending than they have instructions, which a depth == len budget
++	 * rejects with E2BIG. */
++	insn_stack_sz = insn_cnt * 16;
++	if (insn_stack_sz > 65535)
++		insn_stack_sz = 65535;
++	insn_stack = kcalloc(insn_stack_sz, sizeof(int), GFP_KERNEL);
+ 	if (!insn_stack) {
+ 		kfree(insn_state);
+ 		return -ENOMEM;
+@@ -1517,7 +1636,10 @@ static int do_check(struct verifier_env *env)
+ 		insn = &insns[insn_idx];
+ 		class = BPF_CLASS(insn->code);
+ 
+-		if (++insn_processed > 32768) {
++		/* This verifier prunes paths much worse than newer ones,
++		 * and the 32K budget rejects netd's cgroupskb programs.
++		 * Verification runs once per boot, so allow more. */
++		if (++insn_processed > 1048576) {
+ 			verbose("BPF program is too large. Proccessed %d insn\n",
+ 				insn_processed);
+ 			return -E2BIG;
+@@ -1902,9 +2024,11 @@ skip_full_check:
+ 
+ 	if (log_level && log_len >= log_size - 1) {
+ 		BUG_ON(log_len >= log_size);
+-		/* verifier log exceeded user supplied buffer */
+-		ret = -ENOSPC;
+-		/* fall through to return what was recorded */
++		/* verifier log exceeded user supplied buffer: the log is a
++		 * diagnostic, not the verdict. Return the real verification
++		 * result with a truncated log. */
++		if (ret == 0)
++			pr_info_once("bpf: verifier log truncated (buffer %u), program accepted\n", log_size);
+ 	}
+ 
+ 	/* copy verifier log back to user space including trailing zero */
+diff --git a/kernel-3.18/kernel/cgroup.c b/kernel-3.18/kernel/cgroup.c
+index e5212de44..80b879951 100644
+--- a/kernel-3.18/kernel/cgroup.c
++++ b/kernel-3.18/kernel/cgroup.c
+@@ -863,6 +863,9 @@ static void cgroup_destroy_root(struct cgroup_root *root)
+ 	BUG_ON(atomic_read(&root->nr_cgrps));
+ 	BUG_ON(!list_empty(&cgrp->self.children));
+ 
++	/* eBPF stub: drop BPF_PROG_ATTACH refs on the root cgroup. */
++	cgroup_bpf_stub_release(cgrp);
++
+ 	/* Rebind all subsystems back to the default hierarchy */
+ 	rebind_subsystems(&cgrp_dfl_root, root->subsys_mask);
+ 
+@@ -4335,6 +4338,8 @@ static void css_free_work_fn(struct work_struct *work)
+ 			 */
+ 			cgroup_put(cgroup_parent(cgrp));
+ 			kernfs_put(cgrp->kn);
++			/* eBPF stub: drop BPF_PROG_ATTACH refs. */
++			cgroup_bpf_stub_release(cgrp);
+ 			kfree(cgrp);
+ 		} else {
+ 			/*
+-- 
+2.25.1
+

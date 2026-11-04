@@ -1,0 +1,99 @@
+From 1ed9fbc5f96e813937b6a39d8e3788615d51dce8 Mon Sep 17 00:00:00 2001
+From: TWRP Builder <builder@localhost>
+Date: Wed, 4 Nov 2026 09:21:49 +0100
+Subject: [PATCH 20/22] x970_t10_97inc: fix touch rotation and the split screen
+ after resume
+
+GSL3680 raw axes are rotated against the panel. The LCM params lacked
+ufoe_enable and ufoe_params.lr_mode_en, and DSI_Start(DSIDUAL) only
+started DSI0, so panel commands never reached DSI1 after wake.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../mediatek/gsl3680/gsl3680_driver.c         | 21 +++++++++++++++++--
+ .../sharp_wqxganl_dsi_vdo_boe_97inc.c         | 10 ++++++++-
+ .../mediatek/video/mt6797/dispsys/ddp_dsi.c   |  8 ++++---
+ 3 files changed, 33 insertions(+), 6 deletions(-)
+
+diff --git a/kernel-3.18/drivers/input/touchscreen/mediatek/gsl3680/gsl3680_driver.c b/kernel-3.18/drivers/input/touchscreen/mediatek/gsl3680/gsl3680_driver.c
+index be68746fd..44d0ab3e5 100644
+--- a/kernel-3.18/drivers/input/touchscreen/mediatek/gsl3680/gsl3680_driver.c
++++ b/kernel-3.18/drivers/input/touchscreen/mediatek/gsl3680/gsl3680_driver.c
+@@ -32,6 +32,17 @@
+ #define GSL_CLOCK		0x04
+ #define GSL_STATUS_OK		0x5a5a5a5a
+ 
++/*
++ * Without the closed gsl_alg_id library the firmware reports raw sensor
++ * coordinates, rotated against the portrait panel: raw X runs top to bottom
++ * (0..~1650) and raw Y runs right to left (0..~900). Measured by tapping the
++ * corners on the tablet.
++ */
++#define GSL_RAW_X_MAX		1650
++#define GSL_RAW_Y_MAX		900
++#define GSL_SCREEN_W		1536
++#define GSL_SCREEN_H		2048
++
+ #define GSL_MAX_FINGERS		5
+ #define GSL_DATA_LEN		(4 + GSL_MAX_FINGERS * 4)
+ /* The MediaTek I2C FIFO holds 8 bytes without DMA. */
+@@ -175,8 +186,14 @@ static irqreturn_t gsl_irq_thread(int irq, void *unused)
+ 	count = min_t(int, buf[0], GSL_MAX_FINGERS);
+ 	for (i = 0; i < count; i++) {
+ 		u8 *p = buf + 4 + i * 4;
+-		int y = (p[0] | p[1] << 8) & 0xfff;
+-		int x = (p[2] | p[3] << 8) & 0xfff;
++		int raw_y = (p[0] | p[1] << 8) & 0xfff;
++		int raw_x = (p[2] | p[3] << 8) & 0xfff;
++		int x, y;
++
++		raw_x = min(raw_x, GSL_RAW_X_MAX);
++		raw_y = min(raw_y, GSL_RAW_Y_MAX);
++		x = (GSL_RAW_Y_MAX - raw_y) * (GSL_SCREEN_W - 1) / GSL_RAW_Y_MAX;
++		y = raw_x * (GSL_SCREEN_H - 1) / GSL_RAW_X_MAX;
+ 
+ 		input_report_key(tpd->dev, BTN_TOUCH, 1);
+ 		input_report_abs(tpd->dev, ABS_MT_TOUCH_MAJOR, 1);
+diff --git a/kernel-3.18/drivers/misc/mediatek/lcm/sharp_wqxganl_dsi_vdo_boe_97inc/sharp_wqxganl_dsi_vdo_boe_97inc.c b/kernel-3.18/drivers/misc/mediatek/lcm/sharp_wqxganl_dsi_vdo_boe_97inc/sharp_wqxganl_dsi_vdo_boe_97inc.c
+index 76c5d7803..cf90ea1dd 100644
+--- a/kernel-3.18/drivers/misc/mediatek/lcm/sharp_wqxganl_dsi_vdo_boe_97inc/sharp_wqxganl_dsi_vdo_boe_97inc.c
++++ b/kernel-3.18/drivers/misc/mediatek/lcm/sharp_wqxganl_dsi_vdo_boe_97inc/sharp_wqxganl_dsi_vdo_boe_97inc.c
+@@ -142,7 +142,15 @@ static void lcm_get_params(LCM_PARAMS *params)
+ 
+ 	params->dsi.PLL_CLOCK = 370;
+ 	params->dsi.ssc_disable = 1;
+-	params->dsi.cont_clock = 1;
++	/*
++	 * UFOE in left/right mode splits each line between the two DSI links.
++	 * LK sets this at boot; without it the kernel resets UFOE to bypass on
++	 * the first resume and only one half of the panel gets a picture.
++	 * Stock stores 1 at LCM_PARAMS offsets 676, 692 and 704 (ssc_disable,
++	 * ufoe_enable, ufoe_params.lr_mode_en); it leaves cont_clock at 0.
++	 */
++	params->dsi.ufoe_enable = 1;
++	params->dsi.ufoe_params.lr_mode_en = 1;
+ }
+ 
+ static void lcm_init_power(void)
+diff --git a/kernel-3.18/drivers/misc/mediatek/video/mt6797/dispsys/ddp_dsi.c b/kernel-3.18/drivers/misc/mediatek/video/mt6797/dispsys/ddp_dsi.c
+index b55ce0b2a..2f0528748 100644
+--- a/kernel-3.18/drivers/misc/mediatek/video/mt6797/dispsys/ddp_dsi.c
++++ b/kernel-3.18/drivers/misc/mediatek/video/mt6797/dispsys/ddp_dsi.c
+@@ -1936,9 +1936,11 @@ DSI_STATUS DSI_Start(DISP_MODULE_ENUM module, cmdqRecHandle cmdq)
+ 			DSI_OUTREGBIT(cmdq, DSI_START_REG, DSI_REG[i]->DSI_START, DSI_START, 1);
+ 		}
+ 	} else {
+-		/* TODO: do we need this? */
+-		DSI_OUTREGBIT(cmdq, DSI_START_REG, DSI_REG[0]->DSI_START, DSI_START, 0);
+-		DSI_OUTREGBIT(cmdq, DSI_START_REG, DSI_REG[0]->DSI_START, DSI_START, 1);
++		/* Start both links, like the stock kernel. */
++		for (i = 0; i < 2; i++) {
++			DSI_OUTREGBIT(cmdq, DSI_START_REG, DSI_REG[i]->DSI_START, DSI_START, 0);
++			DSI_OUTREGBIT(cmdq, DSI_START_REG, DSI_REG[i]->DSI_START, DSI_START, 1);
++		}
+ 	}
+ 
+ 	return DSI_STATUS_OK;
+-- 
+2.25.1
+

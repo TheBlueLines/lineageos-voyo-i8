@@ -1,0 +1,34 @@
+# Android fstab for the VOYO i8 (x970_t10_97inc), MT6797X.
+# First stage init finds partitions by their GPT name, so system and vendor
+# must use by-name paths. The rest can use raw nodes.
+#   recovery=1 para=2 expdb=3 nvcfg=5 nvdata=6 protect1=8 protect2=9 nvram=19
+#   lk=21 lk2=22 boot=23 logo=24 vendor=29 system=30 cache=31 userdata=32
+#
+#<src>                 <mnt_point>  <type> <mnt_flags>                                            <fs_mgr_flags>
+/dev/block/platform/mtk-msdc.0/11230000.msdc0/by-name/system  /system  ext4  ro  wait,first_stage_mount
+/dev/block/platform/mtk-msdc.0/11230000.msdc0/by-name/vendor  /vendor  ext4  ro  wait,first_stage_mount
+# File-based encryption, v1 policies: kernel 3.18 has the legacy ext4 crypto
+# (keyring "ext4:" keys), not the v2 key ioctls. No metadata encryption: it
+# needs dm-default-key. The keymaster is the stock software one (no TEE).
+/dev/block/mmcblk0p32  /data        ext4   noatime,nosuid,nodev,noauto_da_alloc                   wait,check,formattable,fileencryption=aes-256-xts:aes-256-cts:v1
+# nofail: a failed mount here must not stop ro.crypto.state being set.
+/dev/block/mmcblk0p31  /cache       ext4   noatime,nosuid,nodev,noauto_da_alloc,discard           wait,check,nofail
+/dev/block/mmcblk0p8   /protect_f   ext4   noatime,nosuid,nodev,noauto_da_alloc,commit=1,nodelalloc wait,check,nofail
+/dev/block/mmcblk0p9   /protect_s   ext4   noatime,nosuid,nodev,noauto_da_alloc,commit=1,nodelalloc wait,check,nofail
+/dev/block/mmcblk0p6   /nvdata      ext4   noatime,nosuid,nodev,noauto_da_alloc,discard           wait,check,nofail
+/dev/block/mmcblk0p5   /nvcfg       ext4   noatime,nosuid,nodev,noauto_da_alloc,commit=1,nodelalloc wait,check,nofail
+/dev/block/mmcblk0p4   /persistent  emmc   defaults                                               defaults
+/dev/block/mmcblk0p2   /misc        emmc   defaults                                               defaults
+/dev/block/mmcblk0p23  /boot        emmc   defaults                                               defaults
+/dev/block/mmcblk0p1   /recovery    emmc   defaults                                               defaults
+/dev/block/mmcblk0p19  /nvram       emmc   defaults                                               defaults
+/dev/block/mmcblk0p12  /proinfo     emmc   defaults                                               defaults
+/dev/block/mmcblk0p21  /bootloader  emmc   defaults                                               defaults
+/dev/block/mmcblk0p22  /bootloader2 emmc   defaults                                               defaults
+/dev/block/mmcblk0p24  /logo        emmc   defaults                                               defaults
+/dev/block/mmcblk0p3   /expdb       emmc   defaults                                               defaults
+
+/devices/soc/11270000.usb3_xhci*  auto  auto  defaults  voldmanaged=usbotg:auto
+
+# zram swap: 3.8 GB of RAM, lz4 not in this kernel.
+/dev/block/zram0       none         swap   defaults                                               zramsize=1610612736
