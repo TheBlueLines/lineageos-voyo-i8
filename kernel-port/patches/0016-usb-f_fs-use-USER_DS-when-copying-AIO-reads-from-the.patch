@@ -1,7 +1,7 @@
 From 178f7fba80054526f57f21556546896a86a4db06 Mon Sep 17 00:00:00 2001
 From: TWRP Builder <builder@localhost>
 Date: Mon, 2 Nov 2026 22:18:14 +0100
-Subject: [PATCH 16/22] usb: f_fs: use USER_DS when copying AIO reads from the
+Subject: [PATCH 16/25] usb: f_fs: use USER_DS when copying AIO reads from the
  worker
 
 ---

@@ -1,7 +1,7 @@
 From ae7ac9448636c89831f55cac3ae8ff0b1480b321 Mon Sep 17 00:00:00 2001
 From: voyo-port <port@localhost>
 Date: Fri, 30 Oct 2026 19:56:32 +0100
-Subject: [PATCH 08/22] sched/rt: Fix the build without CONFIG_RT_GROUP_SCHED
+Subject: [PATCH 08/25] sched/rt: Fix the build without CONFIG_RT_GROUP_SCHED
 
 From android_kernel_meizu_m95 by nomorecoolnicknames.
 ---

@@ -1,7 +1,7 @@
 From b9fa9deb0a8ccebd99780a8b16c3355d271dc0b4 Mon Sep 17 00:00:00 2001
 From: TWRP Builder <builder@localhost>
 Date: Mon, 2 Nov 2026 20:35:45 +0100
-Subject: [PATCH 15/22] defconfig: disable lock debugging and RT group
+Subject: [PATCH 15/25] defconfig: disable lock debugging and RT group
  scheduling
 
 ---

@@ -1,7 +1,7 @@
 From d8bee1ec11c1cef9db80480a5dee88bdb29153be Mon Sep 17 00:00:00 2001
 From: voyo-port <port@localhost>
 Date: Fri, 30 Oct 2026 19:59:02 +0100
-Subject: [PATCH 12/22] bpf: Fix the build on 3.18.79
+Subject: [PATCH 12/25] bpf: Fix the build on 3.18.79
 
 ---
  kernel-3.18/.gitignore                                  | 1 +

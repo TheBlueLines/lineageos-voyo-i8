@@ -1,7 +1,7 @@
 From 82ed43aa48460029be37f83395a34490ddf18818 Mon Sep 17 00:00:00 2001
 From: voyo-port <port@localhost>
 Date: Fri, 30 Oct 2026 22:44:00 +0100
-Subject: [PATCH 13/22] uapi: Drop Kbuild entries for missing headers; add the
+Subject: [PATCH 13/25] uapi: Drop Kbuild entries for missing headers; add the
  bring-up failsafe
 
 ---

@@ -1,7 +1,7 @@
 From e0e26c0f2d30a17acb96f4b518db758fffa80273 Mon Sep 17 00:00:00 2001
 From: voyo-port <port@localhost>
 Date: Fri, 30 Oct 2026 22:44:30 +0100
-Subject: [PATCH 14/22] uapi: Drop Kbuild entries for missing headers
+Subject: [PATCH 14/25] uapi: Drop Kbuild entries for missing headers
 
 ---
  kernel-3.18/include/linux/Kbuild | 1 -

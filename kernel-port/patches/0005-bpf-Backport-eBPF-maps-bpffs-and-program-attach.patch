@@ -1,7 +1,7 @@
 From 13b8077884f1e44d6cd06bd123b3d4f9835f374b Mon Sep 17 00:00:00 2001
 From: voyo-port <port@localhost>
 Date: Fri, 30 Oct 2026 19:56:04 +0100
-Subject: [PATCH 05/22] bpf: Backport eBPF maps, bpffs and program attach
+Subject: [PATCH 05/25] bpf: Backport eBPF maps, bpffs and program attach
 
 From android_kernel_meizu_m95 by nomorecoolnicknames.
 ---

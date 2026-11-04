@@ -1,7 +1,7 @@
 From 75f99a35d792b33ae5286463fb9975ffa63cbe6f Mon Sep 17 00:00:00 2001
 From: voyo-port <port@localhost>
 Date: Fri, 30 Oct 2026 19:49:46 +0100
-Subject: [PATCH 03/22] Port to the VOYO i8 (x970_t10_97inc)
+Subject: [PATCH 03/25] Port to the VOYO i8 (x970_t10_97inc)
 
 ---
  kernel-3.18/arch/arm64/configs/x970_t10_97inc_defconfig  | 2 +-

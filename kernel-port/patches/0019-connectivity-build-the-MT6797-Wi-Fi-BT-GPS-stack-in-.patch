@@ -1,7 +1,7 @@
 From 0616f653193edc04ab7a1652c3e6851bd2aa6f86 Mon Sep 17 00:00:00 2001
 From: TWRP Builder <builder@localhost>
 Date: Wed, 4 Nov 2026 09:21:49 +0100
-Subject: [PATCH 19/22] connectivity: build the MT6797 Wi-Fi/BT/GPS stack in,
+Subject: [PATCH 19/25] connectivity: build the MT6797 Wi-Fi/BT/GPS stack in,
  taken from the Meizu MX6 kernel
 
 The Gemini tree only had the Android O build-in adapter, which expects

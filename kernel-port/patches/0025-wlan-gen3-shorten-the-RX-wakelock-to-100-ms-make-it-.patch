@@ -1,0 +1,57 @@
+From 74a9af571bdf177eb1d5d55a75577d8227acc663 Mon Sep 17 00:00:00 2001
+From: TWRP Builder <builder@localhost>
+Date: Wed, 4 Nov 2026 12:08:29 +0100
+Subject: [PATCH 25/25] wlan gen3: shorten the RX wakelock to 100 ms, make it
+ tunable
+
+With Wi-Fi connected and the screen off, the 300 ms 'WLAN timeout'
+wakelock taken after every RX batch was most of the awake time.
+100 ms still lets the packet reach the reading process. The value
+can be changed at runtime in
+/sys/module/wlan_gen3/parameters/rx_wakelock_ms.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../misc/mediatek/connectivity/wlan/gen3/os/linux/gl_kal.c | 7 +++++++
+ .../connectivity/wlan/gen3/os/linux/include/gl_os.h        | 7 ++++++-
+ 2 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/kernel-3.18/drivers/misc/mediatek/connectivity/wlan/gen3/os/linux/gl_kal.c b/kernel-3.18/drivers/misc/mediatek/connectivity/wlan/gen3/os/linux/gl_kal.c
+index db7011efc..5251a051f 100755
+--- a/kernel-3.18/drivers/misc/mediatek/connectivity/wlan/gen3/os/linux/gl_kal.c
++++ b/kernel-3.18/drivers/misc/mediatek/connectivity/wlan/gen3/os/linux/gl_kal.c
+@@ -863,6 +863,13 @@
+ int allocatedMemSize = 0;
+ #endif
+ 
++/* 100 ms, not the stock 300 ms: "WLAN timeout" was the main awake time in
++ * screen-off idle with Wi-Fi connected.
++ */
++unsigned int wlan_rx_wakelock_ms = 100;
++module_param_named(rx_wakelock_ms, wlan_rx_wakelock_ms, uint, 0644);
++MODULE_PARM_DESC(rx_wakelock_ms, "Wakelock timeout after Wi-Fi RX, in ms");
++
+ /*******************************************************************************
+ *                           P R I V A T E   D A T A
+ ********************************************************************************
+diff --git a/kernel-3.18/drivers/misc/mediatek/connectivity/wlan/gen3/os/linux/include/gl_os.h b/kernel-3.18/drivers/misc/mediatek/connectivity/wlan/gen3/os/linux/include/gl_os.h
+index 59cd668d6..7a7fe9231 100755
+--- a/kernel-3.18/drivers/misc/mediatek/connectivity/wlan/gen3/os/linux/include/gl_os.h
++++ b/kernel-3.18/drivers/misc/mediatek/connectivity/wlan/gen3/os/linux/include/gl_os.h
+@@ -678,7 +678,12 @@ extern BOOLEAN fgIsBusAccessFailed;
+ /* #define GLUE_BOW_DEVICE_NAME        "MT6620 802.11 AMP" */
+ #define GLUE_BOW_DEVICE_NAME        "ampc0"
+ 
+-#define WAKE_LOCK_RX_TIMEOUT                            300	/* ms */
++/* Wakelock held after RX so the packet reaches userspace before suspend.
++ * Stock is 300 ms; tunable at runtime through
++ * /sys/module/wlan_gen3/parameters/rx_wakelock_ms.
++ */
++extern unsigned int wlan_rx_wakelock_ms;
++#define WAKE_LOCK_RX_TIMEOUT                            wlan_rx_wakelock_ms	/* ms */
+ #define WAKE_LOCK_THREAD_WAKEUP_TIMEOUT                 50	/* ms */
+ /*Full2Partial*/
+ #define UPDATE_FULL_TO_PARTIAL_SCAN_TIMEOUT             60	/* s */
+-- 
+2.25.1
+

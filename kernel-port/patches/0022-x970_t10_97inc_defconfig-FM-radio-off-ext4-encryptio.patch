@@ -1,7 +1,7 @@
 From 41f005f620aefadf33046cd6784bb9a615346024 Mon Sep 17 00:00:00 2001
 From: TWRP Builder <builder@localhost>
 Date: Wed, 4 Nov 2026 09:21:49 +0100
-Subject: [PATCH 22/22] x970_t10_97inc_defconfig: FM radio off, ext4 encryption
+Subject: [PATCH 22/25] x970_t10_97inc_defconfig: FM radio off, ext4 encryption
  for FBE
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

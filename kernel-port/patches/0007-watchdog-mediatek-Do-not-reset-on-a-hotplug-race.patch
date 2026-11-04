@@ -1,7 +1,7 @@
 From dbbec4d5f8b3ca02e8a4dad1d9f0b85f860dab59 Mon Sep 17 00:00:00 2001
 From: voyo-port <port@localhost>
 Date: Fri, 30 Oct 2026 19:56:32 +0100
-Subject: [PATCH 07/22] watchdog: mediatek: Do not reset on a hotplug race
+Subject: [PATCH 07/25] watchdog: mediatek: Do not reset on a hotplug race
 
 From android_kernel_meizu_m95 by nomorecoolnicknames.
 ---

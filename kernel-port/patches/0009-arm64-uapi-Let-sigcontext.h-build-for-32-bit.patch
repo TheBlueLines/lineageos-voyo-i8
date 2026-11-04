@@ -1,7 +1,7 @@
 From 2a988689589c032e64f6b6ba15d2cb33c0d48d4d Mon Sep 17 00:00:00 2001
 From: voyo-port <port@localhost>
 Date: Fri, 30 Oct 2026 19:56:32 +0100
-Subject: [PATCH 09/22] arm64: uapi: Let sigcontext.h build for 32-bit
+Subject: [PATCH 09/25] arm64: uapi: Let sigcontext.h build for 32-bit
 
 From android_kernel_meizu_m95 by nomorecoolnicknames.
 ---

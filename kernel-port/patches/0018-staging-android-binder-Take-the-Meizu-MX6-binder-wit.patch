@@ -1,7 +1,7 @@
 From 197f3315a5659aa406054ab66f7d8d7e8cca4d4f Mon Sep 17 00:00:00 2001
 From: TWRP Builder <builder@localhost>
 Date: Tue, 3 Nov 2026 08:55:51 +0100
-Subject: [PATCH 18/22] staging: android: binder: Take the Meizu MX6 binder
+Subject: [PATCH 18/25] staging: android: binder: Take the Meizu MX6 binder
  with sender security contexts
 
 ---

@@ -1,7 +1,7 @@
 From daceaa35938f778fbf27353115dd3647f27ac44b Mon Sep 17 00:00:00 2001
 From: voyo-port <port@localhost>
 Date: Fri, 30 Oct 2026 19:56:32 +0100
-Subject: [PATCH 06/22] staging: android: sync: Allow releasing pending fence
+Subject: [PATCH 06/25] staging: android: sync: Allow releasing pending fence
  points
 
 ---

@@ -1,7 +1,7 @@
 From cf781322aee1e87e06a25f978eb8b7763e101919 Mon Sep 17 00:00:00 2001
 From: voyo-port <port@localhost>
 Date: Fri, 30 Oct 2026 19:56:33 +0100
-Subject: [PATCH 11/22] x970_t10_97inc: Enable the Android 13 kernel features
+Subject: [PATCH 11/25] x970_t10_97inc: Enable the Android 13 kernel features
 
 ---
  .../arm64/configs/x970_t10_97inc_defconfig    | 31 +++++++++++--------

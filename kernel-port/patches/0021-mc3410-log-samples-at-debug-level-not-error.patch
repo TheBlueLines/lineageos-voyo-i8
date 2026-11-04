@@ -1,7 +1,7 @@
 From 7f9931f013bcd68ce74d2fae9684782c86dc82a5 Mon Sep 17 00:00:00 2001
 From: TWRP Builder <builder@localhost>
 Date: Wed, 4 Nov 2026 09:21:49 +0100
-Subject: [PATCH 21/22] mc3410: log samples at debug level, not error
+Subject: [PATCH 21/25] mc3410: log samples at debug level, not error
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---

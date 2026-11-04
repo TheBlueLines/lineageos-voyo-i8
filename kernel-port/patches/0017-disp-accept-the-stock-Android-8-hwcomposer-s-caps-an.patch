@@ -1,7 +1,7 @@
 From 8ec43052ddce38c38fc2b170629f4dd8163d0431 Mon Sep 17 00:00:00 2001
 From: TWRP Builder <builder@localhost>
 Date: Mon, 2 Nov 2026 23:31:10 +0100
-Subject: [PATCH 17/22] disp: accept the stock Android 8 hwcomposer's caps and
+Subject: [PATCH 17/25] disp: accept the stock Android 8 hwcomposer's caps and
  input buffer ioctls
 
 ---
