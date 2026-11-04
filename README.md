@@ -16,7 +16,7 @@ Tested on one tablet.
 
 | Feature | State |
 |---|---|
-| Boot, display, touch, sleep and wake | Working |
+| Boot, display, touch, sleep and wake | Working; the tablet deep-sleeps with the screen off (about 92% of screen-off time with Wi-Fi connected) |
 | Wi-Fi (2.4 and 5 GHz) | Working |
 | Bluetooth | Working |
 | Battery and charging | Working |
@@ -25,15 +25,14 @@ Tested on one tablet.
 | Encryption | File-based (FBE v1); keys are protected only in software, since the tablet has no TEE |
 | Signing | Private release keys (`dev-keys`), so the Trust app reports the build as signed |
 | Security patch | Shows 2026-02-01. LineageOS 20 gets community ASB backports, up to about October 2026, without bumping that date |
-| Audio output | **Not working**: the sound card fails to probe in the kernel |
+| Audio output | Sound card registers and the audio HAL writes to it; speaker and headphone output not yet checked by ear |
 | Camera | **Not working**: the camera HAL crashes during sensor detection, so it is disabled |
 | Hardware video decoding | OMX runs, but the software Codec2 decoders are picked first |
 | GPS, sensors, USB OTG | Untested |
 | Display refresh | 48.3 Hz, the panel's stock rate |
 
 Known bring-up leftovers: `adb reboot` from Android lands in TWRP once (the `voyo_failsafe` RTC mark;
-`adb reboot` from TWRP boots Android). A diagnostic logger runs until boot completes. Wi-Fi chip
-power saving is off, which costs idle battery.
+`adb reboot` from TWRP boots Android). A diagnostic logger runs until boot completes.
 
 ## Before you flash
 

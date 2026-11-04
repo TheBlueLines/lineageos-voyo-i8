@@ -38,8 +38,9 @@ done
 # the stock O vendor keeps WMT_SOC.cfg in /vendor/firmware (as the stock kernel expects)
 sed -i 's|#define CUST_CFG_WMT_PREFIX "/vendor/etc/firmware/"|#define CUST_CFG_WMT_PREFIX "/vendor/firmware/"|' $C/common/conn_soc/core/include/wmt_conf.h
 grep -q '"/vendor/firmware/"' $C/common/conn_soc/core/include/wmt_conf.h
-# Workaround: consys never answers the STP-PSM wakeup (first wakeup after its
-# first sleep times out on "Wait for ACT"), which wedges Wi-Fi/BT after the
-# first off. Keep consys awake until the sleep handshake is fixed.
-sed -i 's/^static UINT32 gPsEnable = 1;/static UINT32 gPsEnable = 0;/' $C/common/conn_soc/core/wmt_lib.c
-grep -q '^static UINT32 gPsEnable = 0;' $C/common/conn_soc/core/wmt_lib.c
+# STP-PSM stays enabled (m95 default gPsEnable = 1). An earlier workaround set
+# it to 0 because a "Wait for ACT" wakeup timeout was seen during bring-up, but
+# with PSM off BTIF never leaves the ON state and refuses every system suspend,
+# so the tablet never deep-sleeps. Kernel #21 (2026-11-04) runs with PSM on:
+# Wi-Fi off/on, BT on/off and repeated suspend/resume all work.
+grep -q '^static UINT32 gPsEnable = 1;' $C/common/conn_soc/core/wmt_lib.c

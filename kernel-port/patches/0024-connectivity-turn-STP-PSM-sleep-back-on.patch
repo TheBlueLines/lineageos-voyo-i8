@@ -1,0 +1,32 @@
+From 1aa4646df37adde46730b652a3bc8f1818622f55 Mon Sep 17 00:00:00 2001
+From: TWRP Builder <builder@localhost>
+Date: Wed, 4 Nov 2026 11:53:50 +0100
+Subject: [PATCH 24/24] connectivity: turn STP-PSM sleep back on
+
+With gPsEnable = 0 the consys never sleeps, BTIF stays in the ON state
+and refuses every system suspend, so the tablet never deep-sleeps. The
+"Wait for ACT" wakeup timeout that led to disabling it no longer
+occurs: Wi-Fi off/on, BT on/off and repeated suspend/resume work, and
+the tablet spends about 92% of screen-off time in suspend.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../misc/mediatek/connectivity/common/conn_soc/core/wmt_lib.c   | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/kernel-3.18/drivers/misc/mediatek/connectivity/common/conn_soc/core/wmt_lib.c b/kernel-3.18/drivers/misc/mediatek/connectivity/common/conn_soc/core/wmt_lib.c
+index 8b337db76..77eb5c61a 100644
+--- a/kernel-3.18/drivers/misc/mediatek/connectivity/common/conn_soc/core/wmt_lib.c
++++ b/kernel-3.18/drivers/misc/mediatek/connectivity/common/conn_soc/core/wmt_lib.c
+@@ -73,7 +73,7 @@ static const WMT_IC_PIN_STATE cmb_aif2pin_stat[] = {
+ 
+ #if CFG_WMT_PS_SUPPORT
+ static UINT32 gPsIdleTime = STP_PSM_IDLE_TIME_SLEEP;
+-static UINT32 gPsEnable = 0;
++static UINT32 gPsEnable = 1;
+ static PF_WMT_SDIO_PSOP sdio_own_ctrl;
+ #endif
+ 
+-- 
+2.25.1
+

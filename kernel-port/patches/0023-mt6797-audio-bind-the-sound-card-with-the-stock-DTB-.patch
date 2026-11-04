@@ -1,0 +1,121 @@
+From df26775411a4be4cddc0db2c75a30e3292f7ae6f Mon Sep 17 00:00:00 2001
+From: TWRP Builder <builder@localhost>
+Date: Wed, 4 Nov 2026 11:53:50 +0100
+Subject: [PATCH 23/24] mt6797 audio: bind the sound card with the stock DTB,
+ fix suspend oops
+
+The boot image uses the stock VOYO base DTB, which has no
+mediatek,mt_soc_pcm_deep_buffer_dl node, so the DEEP_BUFFER_DL_OUTPUT dai
+link deferred the whole card and /proc/asound had no cards.
+
+- deep_buffer_dl: register the platform device when the DT has no node.
+- SetAnalogSuspend: return when the codec never probed. mCodec_data was
+  NULL and every real suspend oopsed in mtk_routing_pm_ops_suspend, so
+  pressing the power button rebooted the tablet.
+- AudDrv_GPIO_Select: skip pin states missing from the DT instead of
+  BUG(). The stock audio node has no pinctrl-names; the preloader muxes
+  the AUD pins.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../sound/soc/mediatek/mt6797/AudDrv_Gpio.c   |  9 +++--
+ .../soc/mediatek/mt6797/mt_soc_codec_63xx.c   |  4 ++
+ .../mt6797/mt_soc_pcm_deep_buffer_dl.c        | 40 ++++++++++++++++++-
+ 3 files changed, 49 insertions(+), 4 deletions(-)
+
+diff --git a/kernel-3.18/sound/soc/mediatek/mt6797/AudDrv_Gpio.c b/kernel-3.18/sound/soc/mediatek/mt6797/AudDrv_Gpio.c
+index f44debe8d..94ca87d70 100755
+--- a/kernel-3.18/sound/soc/mediatek/mt6797/AudDrv_Gpio.c
++++ b/kernel-3.18/sound/soc/mediatek/mt6797/AudDrv_Gpio.c
+@@ -198,9 +198,12 @@ static int AudDrv_GPIO_Select(enum audio_system_gpio_type _type)
+ 	}
+ 
+ 	if (!aud_gpios[_type].gpio_prepare) {
+-		pr_err("%s(), error, gpio type %d not prepared\n",
+-		       __func__, _type);
+-		BUG();
++		/* VOYO i8: the stock DT audio node has no pinctrl states; the
++		 * preloader already muxes the AUD pins. Skip instead of BUG().
++		 */
++		pr_debug("%s(), gpio type %d not prepared, skipped\n",
++			 __func__, _type);
++		return 0;
+ 	}
+ 
+ 	ret = pinctrl_select_state(pinctrlaud,
+diff --git a/kernel-3.18/sound/soc/mediatek/mt6797/mt_soc_codec_63xx.c b/kernel-3.18/sound/soc/mediatek/mt6797/mt_soc_codec_63xx.c
+index cd0351703..56dfc860c 100755
+--- a/kernel-3.18/sound/soc/mediatek/mt6797/mt_soc_codec_63xx.c
++++ b/kernel-3.18/sound/soc/mediatek/mt6797/mt_soc_codec_63xx.c
+@@ -313,6 +313,10 @@ static bool mAnaSuspend;
+ void SetAnalogSuspend(bool bEnable)
+ {
+ 	pr_warn("%s bEnable ==%d mAnaSuspend = %d\n", __func__, bEnable, mAnaSuspend);
++	if (!mCodec_data) {
++		pr_warn("%s: codec not probed, skipping\n", __func__);
++		return;
++	}
+ 	if ((bEnable == true) && (mAnaSuspend == false)) {
+ 		/*Ana_Log_Print();*/
+ 		SavePowerState();
+diff --git a/kernel-3.18/sound/soc/mediatek/mt6797/mt_soc_pcm_deep_buffer_dl.c b/kernel-3.18/sound/soc/mediatek/mt6797/mt_soc_pcm_deep_buffer_dl.c
+index b42d0d6db..50f0b1d89 100644
+--- a/kernel-3.18/sound/soc/mediatek/mt6797/mt_soc_pcm_deep_buffer_dl.c
++++ b/kernel-3.18/sound/soc/mediatek/mt6797/mt_soc_pcm_deep_buffer_dl.c
+@@ -59,6 +59,7 @@
+ #include "mt_soc_pcm_common.h"
+ #include "AudDrv_Gpio.h"
+ #include <linux/ftrace.h>
++#include <linux/of.h>
+ 
+ 
+ #ifdef DEBUG_DEEP_BUFFER_DL
+@@ -530,7 +531,44 @@ static struct platform_driver mtk_deep_buffer_dl_driver = {
+ 	.remove = mtk_deep_buffer_dl_remove,
+ };
+ 
+-module_platform_driver(mtk_deep_buffer_dl_driver);
++static struct platform_device *soc_deep_buffer_dl_dev;
++
++static int __init mtk_deep_buffer_dl_init(void)
++{
++	int ret;
++	struct device_node *np;
++
++	/* VOYO i8: stock base DTB lacks this node; without the platform the
++	 * sound card never binds. Create the device when the DT has none.
++	 */
++	np = of_find_compatible_node(NULL, NULL,
++				     "mediatek,mt_soc_pcm_deep_buffer_dl");
++	if (np) {
++		of_node_put(np);
++	} else {
++		soc_deep_buffer_dl_dev =
++			platform_device_alloc(MT_SOC_DEEP_BUFFER_DL_PCM, -1);
++		if (!soc_deep_buffer_dl_dev)
++			return -ENOMEM;
++		ret = platform_device_add(soc_deep_buffer_dl_dev);
++		if (ret) {
++			platform_device_put(soc_deep_buffer_dl_dev);
++			soc_deep_buffer_dl_dev = NULL;
++			return ret;
++		}
++	}
++	return platform_driver_register(&mtk_deep_buffer_dl_driver);
++}
++
++static void __exit mtk_deep_buffer_dl_exit(void)
++{
++	platform_driver_unregister(&mtk_deep_buffer_dl_driver);
++	if (soc_deep_buffer_dl_dev)
++		platform_device_unregister(soc_deep_buffer_dl_dev);
++}
++
++module_init(mtk_deep_buffer_dl_init);
++module_exit(mtk_deep_buffer_dl_exit);
+ 
+ MODULE_DESCRIPTION("AFE PCM module platform driver");
+ MODULE_LICENSE("GPL");
+-- 
+2.25.1
+
