@@ -1,0 +1,40 @@
+diff --git a/services/camera/libcameraservice/common/hidl/HidlProviderInfo.cpp b/services/camera/libcameraservice/common/hidl/HidlProviderInfo.cpp
+index 630090b..aeab60e 100644
+--- a/services/camera/libcameraservice/common/hidl/HidlProviderInfo.cpp
++++ b/services/camera/libcameraservice/common/hidl/HidlProviderInfo.cpp
+@@ -14,6 +14,8 @@
+  * limitations under the License.
+  */
+ #include "HidlProviderInfo.h"
++#include <algorithm>
++#include <vector>
+ #include "common/HalConversionsTemplated.h"
+ #include "common/CameraProviderInfoTemplated.h"
+ 
+@@ -608,6 +610,26 @@ HidlProviderInfo::HidlDeviceInfo3::HidlDeviceInfo3(
+ 
+     mSystemCameraKind = getSystemCameraKind();
+ 
++    // The VOYO i8 HAL reports a flash unit but its static table only lists AE
++    // OFF and ON, so no app can ask for flash. Stock used HAL1 and never read it.
++    camera_metadata_entry flashInfo = mCameraCharacteristics.find(ANDROID_FLASH_INFO_AVAILABLE);
++    camera_metadata_entry aeModes = mCameraCharacteristics.find(ANDROID_CONTROL_AE_AVAILABLE_MODES);
++    if (flashInfo.count == 1 && flashInfo.data.u8[0] == ANDROID_FLASH_INFO_AVAILABLE_TRUE &&
++            aeModes.count > 0) {
++        std::vector<uint8_t> modes(aeModes.data.u8, aeModes.data.u8 + aeModes.count);
++        const size_t before = modes.size();
++        for (uint8_t mode : {ANDROID_CONTROL_AE_MODE_ON_AUTO_FLASH,
++                ANDROID_CONTROL_AE_MODE_ON_ALWAYS_FLASH}) {
++            if (std::find(modes.begin(), modes.end(), mode) == modes.end()) {
++                modes.push_back(mode);
++            }
++        }
++        if (modes.size() != before) {
++            mCameraCharacteristics.update(ANDROID_CONTROL_AE_AVAILABLE_MODES, modes.data(),
++                    modes.size());
++        }
++    }
++
+     status_t res = fixupMonochromeTags();
+     if (OK != res) {
+         ALOGE("%s: Unable to fix up monochrome tags based for older HAL version: %s (%d)",

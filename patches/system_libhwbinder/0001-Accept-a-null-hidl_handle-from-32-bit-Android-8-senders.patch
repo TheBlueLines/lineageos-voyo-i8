@@ -1,0 +1,18 @@
+diff --git a/Parcel.cpp b/Parcel.cpp
+index a20d98c..d435b61 100644
+--- a/Parcel.cpp
++++ b/Parcel.cpp
+@@ -1350,7 +1350,12 @@ bool Parcel::verifyBufferObject(const binder_buffer_object *buffer_obj,
+             reinterpret_cast<uint8_t*>(parentBuffer->buffer) + parentOffset);
+         void* childBuffer = reinterpret_cast<void*>(buffer_obj->buffer);
+ 
+-        if (bufferInParent != childBuffer) {
++        // VOYO i8: a 32-bit Android 8 sender leaves junk in the upper half of a
++        // null hidl_handle pointer. The kernel only fixes up non-null pointers,
++        // so accept exactly that case; real pointers still have to match.
++        bool nullFrom32Bit = childBuffer == nullptr &&
++                static_cast<uint32_t>(reinterpret_cast<uintptr_t>(bufferInParent)) == 0;
++        if (bufferInParent != childBuffer && !nullFrom32Bit) {
+               ALOGE("Buffer in parent %p differs from embedded buffer %p",
+                     bufferInParent, childBuffer);
+               android_errorWriteLog(0x534e4554, "179289794");

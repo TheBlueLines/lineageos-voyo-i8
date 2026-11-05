@@ -1,0 +1,56 @@
+diff --git a/media/libstagefright/Android.bp b/media/libstagefright/Android.bp
+index e71f3b5..0d75496 100644
+--- a/media/libstagefright/Android.bp
++++ b/media/libstagefright/Android.bp
+@@ -340,6 +340,8 @@ cc_library {
+     ],
+ 
+     shared_libs: [
++        "libstagefright_omx",
++        "libstagefright_xmlparser",
+         "libstagefright_framecapture_utils",
+         "libaudioutils",
+         "libbase",
+diff --git a/media/libstagefright/OmxInfoBuilder.cpp b/media/libstagefright/OmxInfoBuilder.cpp
+index 79ffdeb..58710f3 100644
+--- a/media/libstagefright/OmxInfoBuilder.cpp
++++ b/media/libstagefright/OmxInfoBuilder.cpp
+@@ -112,6 +112,38 @@ status_t OmxInfoBuilder::buildMediaCodecList(MediaCodecListWriter* writer) {
+         return NO_INIT;
+     }
+ 
++    // VOYO i8: the Android 8 vendor service still has the stub IOmxStore, which
++    // always lists no roles, so no OMX codec would be visible. Read the vendor
++    // codec list here instead, keeping only the nodes named by the prefix.
++    if (roles.size() == 0) {
++        std::string prefix = ::android::base::GetProperty(
++                "debug.stagefright.omx_list_prefix", "OMX.MTK.VIDEO.ENCODER.");
++        sp<IOmx> omx = IOmx::getService();
++        if (omx != nullptr && !prefix.empty()) {
++            sp<IOmxStore> localStore = new implementation::OmxStore(omx, "default");
++            localStore->listRoles([&roles, &prefix](
++                    const hidl_vec<IOmxStore::RoleInfo>& inRoleList) {
++                std::vector<IOmxStore::RoleInfo> kept;
++                for (const IOmxStore::RoleInfo& role : inRoleList) {
++                    std::vector<IOmxStore::NodeInfo> nodes;
++                    for (const IOmxStore::NodeInfo& node : role.nodes) {
++                        if (hasPrefix(node.name, prefix.c_str())) {
++                            nodes.push_back(node);
++                        }
++                    }
++                    if (!nodes.empty()) {
++                        IOmxStore::RoleInfo r = role;
++                        r.nodes = nodes;
++                        kept.push_back(r);
++                    }
++                }
++                roles = kept;
++            });
++            ALOGI("Vendor IOmxStore is empty: listed %zu roles from %s nodes",
++                    roles.size(), prefix.c_str());
++        }
++    }
++
+     hidl_vec<IOmxStore::ServiceAttribute> serviceAttributes;
+     transStatus = omxStore->listServiceAttributes(
+             [&status, &serviceAttributes] (

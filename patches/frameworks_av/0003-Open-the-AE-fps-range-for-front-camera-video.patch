@@ -1,0 +1,29 @@
+diff --git a/services/camera/libcameraservice/device3/Camera3Device.cpp b/services/camera/libcameraservice/device3/Camera3Device.cpp
+index 6fb7dfd..f128f8a 100644
+--- a/services/camera/libcameraservice/device3/Camera3Device.cpp
++++ b/services/camera/libcameraservice/device3/Camera3Device.cpp
+@@ -2073,6 +2073,24 @@ sp<Camera3Device::CaptureRequest> Camera3Device::createCaptureRequest(
+     sp<CaptureRequest> newRequest = new CaptureRequest();
+     newRequest->mSettingsList = request;
+ 
++    // VOYO i8: the GC2235 front sensor tops out near 15 fps, but with a fixed AE
++    // range the vendor HAL holds it to 30 ms at low gain, so video comes out about
++    // 4x darker than photos. Open the range on video requests so its AE works.
++    if (mId == "1") {
++        for (auto& settings : newRequest->mSettingsList) {
++            camera_metadata_entry_t intent =
++                    settings.metadata.find(ANDROID_CONTROL_CAPTURE_INTENT);
++            camera_metadata_entry_t fps =
++                    settings.metadata.find(ANDROID_CONTROL_AE_TARGET_FPS_RANGE);
++            if (intent.count == 1 && fps.count == 2 &&
++                    intent.data.u8[0] == ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_RECORD &&
++                    fps.data.i32[0] == fps.data.i32[1]) {
++                const int32_t range[2] = {5, fps.data.i32[1]};
++                settings.metadata.update(ANDROID_CONTROL_AE_TARGET_FPS_RANGE, range, 2);
++            }
++        }
++    }
++
+     camera_metadata_entry_t inputStreams =
+             newRequest->mSettingsList.begin()->metadata.find(ANDROID_REQUEST_INPUT_STREAMS);
+     if (inputStreams.count > 0) {
