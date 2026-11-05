@@ -15,8 +15,9 @@ sys.usb.ffs.aio_compat=1
 # Kernel 3.18 is in no Android 13 compatibility matrix.
 ro.vendor.vintf.legacy_kernel=true
 
-# Bring-up: no modem until the rest works.
-ro.radio.noril=yes
-
 # The stock audio HAL uses the Android 8 audio.h stream layout.
 ro.vendor.audio.legacy_oreo_abi=true
+
+# Camera: Android 13 dropped device HAL 1, so make the MTK provider offer HAL3.
+persist.mtkcam.aosp_hal_legacy=0
+persist.mtkcam.aosp_hal_version=3

@@ -10,8 +10,15 @@ r_dir_file(hal_thermal_default, proc_mtktz)
 allow hal_audio_default sysfs_switch:dir search;
 allow hal_audio_default system_file:file r_file_perms;
 
-# gralloc maps ashmem for buffer metadata.
-allow hal_graphics_allocator_default ashmem_device:chr_file r_file_perms;
+# gralloc maps ashmem for buffer metadata. The composer loads gralloc in-process
+# for its overlay scratch buffers; without this every rotated camera preview
+# frame loses its buffer and the layer flickers.
+allow { hal_graphics_allocator_default hal_graphics_composer_default } ashmem_device:chr_file r_file_perms;
+
+# Once a buffer exists the composer's blit path reaches libdpframework's PQ
+# setup, which maps HIDL shared memory and aborts the process if that fails.
+allow hal_graphics_composer_default hidl_memory_hwservice:hwservice_manager find;
+allow hal_graphics_composer_default hal_allocator_server:fd use;
 
 # libnvram parses /data/nvram/fstab.mt6797 (copied there by init).
 allow { mtk_hal_bluetooth mtk_stock_domain } nvram_data_file:dir search;
@@ -27,8 +34,8 @@ allow sysenv_daemon proc_lk_env:file ioctl;
 allow thermal_manager thermalloadalgod:unix_stream_socket connectto;
 
 # Service sockets for wfca and the C2K modem daemons.
-allow init { wfca_socket msap_c2k_socket }:sock_file { create setattr getattr unlink };
-allow mtk_stock_domain { wfca_socket msap_c2k_socket }:sock_file write;
+allow init { wfca_socket msap_c2k_socket mtk_ril_socket }:sock_file { create setattr getattr unlink };
+allow { mtk_stock_domain rild } { wfca_socket msap_c2k_socket mtk_ril_socket }:sock_file write;
 # sysenv_daemon reads/writes LK environment through /proc/lk_env ioctls ('e').
 allowxperm sysenv_daemon proc_lk_env:file ioctl { 0x6500-0x65ff };
 
@@ -51,3 +58,18 @@ dontaudit mtk_hal_power system_data_file:file append;
 # eMMC block attributes (relabelled in genfs_contexts).
 r_dir_file(sysenv_daemon, sysfs_devices_block)
 allow init sysfs_devices_block:file w_file_perms;
+
+# camerahalserver: its prebuilt libcutils opens /dev/ashmem directly (FMQ for the
+# HIDL session), seninf reads the efuse through /dev/devmap, and m4u and the JPEG
+# encoder are ioctls on /proc entries, which Android 13 filters by command.
+allow mtk_hal_camera ashmem_device:chr_file r_file_perms;
+allow mtk_hal_camera devmap_device:chr_file r_file_perms;
+allowxperm mtk_hal_camera proc:file ioctl { 0x6700-0x67ff 0x7800-0x78ff };
+
+# rilproxy (rild) sits between the framework and mtkrild. These are what it
+# asked for on its first run; mtkrild reads the eMMC name and LK environment.
+allow rild mtkrild:unix_stream_socket connectto;
+vndbinder_use(rild)
+allow rild hal_audio_hwservice:hwservice_manager find;
+r_dir_file(mtkrild, sysfs_devices_block)
+allowxperm mtkrild proc_lk_env:file ioctl { 0x6500-0x65ff };

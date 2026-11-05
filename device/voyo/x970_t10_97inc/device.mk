@@ -17,7 +17,9 @@ PRODUCT_USE_DYNAMIC_PARTITIONS := false
 
 # Bring-up logger, started from init.mt6797.rc.
 PRODUCT_COPY_FILES += \
-    $(LOCAL_PATH)/rootdir/bin/voyo_diag.sh:$(TARGET_COPY_OUT_VENDOR)/bin/voyo_diag.sh
+    $(LOCAL_PATH)/rootdir/bin/voyo_diag.sh:$(TARGET_COPY_OUT_VENDOR)/bin/voyo_diag.sh \
+    $(LOCAL_PATH)/rootdir/voyo_gps.rc:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/init/voyo_gps.rc \
+    $(LOCAL_PATH)/rootdir/voyo_modem.rc:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/init/voyo_modem.rc
 
 # Stock blobs. Keep the device overrides above this line: the first
 # PRODUCT_COPY_FILES entry for a path wins.

@@ -1,0 +1,15 @@
+# The MTK modem daemons pick their device nodes and which modems to boot from
+# ro.boot.opt_*. LK puts these in /firmware/android of the device tree, but
+# BoardConfig.mk points init away from that node (its fstab forces dm-verity)
+# and LK's cmdline limit has no room for them. Values are the tablet's node.
+# Only init itself may set ro.boot.*, hence system_ext and not the vendor rc.
+on early-init
+    setprop ro.boot.opt_c2k_lte_mode 2
+    setprop ro.boot.opt_c2k_support 1
+    setprop ro.boot.opt_eccci_c2k 1
+    setprop ro.boot.opt_irat_support 1
+    setprop ro.boot.opt_lte_support 1
+    setprop ro.boot.opt_md1_support 12
+    setprop ro.boot.opt_md3_support 2
+    setprop ro.boot.opt_ps1_rat C/Lf/Lt/W/T/G
+    setprop ro.boot.opt_using_default 1

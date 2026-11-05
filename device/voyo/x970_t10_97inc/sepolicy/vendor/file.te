@@ -12,3 +12,5 @@ type vendor_fw_file, vendor_file_type, file_type;
 # Sockets init creates for the stock radio daemons (rc "socket" lines).
 type wfca_socket, file_type;
 type msap_c2k_socket, file_type;
+# Stock left these as socket_device, which init may no longer create.
+type mtk_ril_socket, file_type;

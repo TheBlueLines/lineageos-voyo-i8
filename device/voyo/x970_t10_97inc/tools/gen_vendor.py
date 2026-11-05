@@ -263,14 +263,58 @@ with open(omx, "wb") as f:
     f.write(data.replace(old, new))
 shutil.copyfile(os.path.join(DEV, "seccomp/omx-base-o.policy"), os.path.join(PROP, "etc/seccomp_policy/omx-base-o.policy"))
 
-# 5c. The camera HAL segfaults while probing sensors (I2C ACK errors on
-# i2c-2), and every restart costs a crash dump. Keep it for manual testing
-# (setprop ctl.start camerahalserver) but don't start it with class main.
-rc = os.path.join(PROP, "etc/init/camerahalserver.rc")
-src = open(rc).read()
-assert "service camerahalserver " in src
-with open(rc, "w", newline="\n") as f:
-    f.write(re.sub(r"^(service camerahalserver .*\n)", r"\1    disabled\n", src, count=1, flags=re.M))
+# 5b1. libmnl tears down mutexes 3, 5 and 6 of its table on two paths each (the
+# GPS stop, mtk_gps_uninit, the agent thread's exit). Android 8 returned EBUSY
+# for that, Android 13 aborts, so mnld died whenever a client stopped GPS. Every
+# destroy goes through one wrapper: replace its blx with "movs r0, #0; nop".
+# Bionic mutexes hold no resources and the next start re-inits the table.
+mnl = os.path.join(PROP, "lib/libmnl.so")
+with open(mnl, "rb") as f:
+    data = f.read()
+old = bytes.fromhex("064b7b4403eb8000" "f6f728ea" "002814bf")
+new = bytes.fromhex("064b7b4403eb8000" "002000bf" "002814bf")
+assert data.count(old) == 1, "libmnl mutex destroy wrapper not found"
+with open(mnl, "wb") as f:
+    f.write(data.replace(old, new))
+
+# 5b1a. The GPS HAL forwards measurements and navigation messages through
+# callback tables it never checks. mnld keeps sending them after the HAL restarts,
+# and not every slot is filled, so a null callback killed the HAL and then
+# system_server. Guard the four call sites: each loads the table and its callback,
+# skips the call if either is null, and gives up the stack canary compare for the
+# room. These functions only copy fixed-size structs to their own stack.
+gps = os.path.join(PROP, "lib64/hw/gps.mt6797.so")
+with open(gps, "rb") as f:
+    data = f.read()
+for old, new in (
+    ("083140f9e9a30ff9eaa70ff9ebab0ff9080540f900013fd648d03bd5081540f9a9835ef81f0109ebc1000054", "083140f9480100b4080540f9080100b4e9a30ff9eaa70ff9ebab0ff900013fd61f2003d51f2003d51f2003d5"),
+    ("083140f9e92b12f9ea2f12f9eb6324b9080940f900013fd648d03bd5081540f9a9835ef81f0109ebc1000054", "083140f9480100b4080940f9080100b4e92b12f9ea2f12f9eb6324b900013fd61f2003d51f2003d51f2003d5"),
+    ("293540f9e0230091ea2f0079eba301a9e8031b32290540f9e80700f920013fd6681640f9a9835ef81f0109eba1000054", "293540f9690100b4290540f9290100b4e0230091ea2f0079eba301a9e8031b32e80700f920013fd61f2003d51f2003d5"),
+    ("4a3540f908144079e91300f9091840790b1c4079e00300914a0940f9e8170079e91b0079eb1f007940013fd6681640f9a9835ef81f0109eba1000054", "4a3540f9ca0100b44a0940f98a0100b408144079e91300f9091840790b1c4079e0030091e8170079e91b0079eb1f007940013fd61f2003d51f2003d5"),
+):
+    old, new = bytes.fromhex(old), bytes.fromhex(new)
+    assert data.count(old) == 1, "GPS HAL callback site not found"
+    data = data.replace(old, new)
+with open(gps, "wb") as f:
+    f.write(data)
+
+# 5b1b. mnld's four navigation message loops copy the payload to a data pointer
+# they zero and never set, so the first real message segfaulted it, and the same
+# pointer then goes to the HAL. Load the source buffer in its place: the copy
+# becomes a no-op on itself and the HAL gets the real payload.
+mnld = os.path.join(PROP, "bin/mnld")
+with open(mnld, "rb") as f:
+    data = f.read()
+old = bytes.fromhex("379f079942463846")
+new = bytes.fromhex("079f079942463846")
+assert data.count(old) == 4, "mnld navigation copy sites not found"
+with open(mnld, "wb") as f:
+    f.write(data.replace(old, new))
+
+# 5c. camerahalserver used to segfault in its sensor search: the kernel had no
+# GC5005/GC2235 drivers and returned a 216-byte sensor info struct where the
+# stock HAL expects 160 bytes. Fixed in the kernel (scripts/camera_kernel.sh),
+# so the stock rc is used unchanged and the service starts with class main.
 
 # 5b2. wpa_supplicant keeps its config and sockets in /data/misc/wifi, which is
 # core data: enforcing SELinux stops vendor_init from creating it, so after a
@@ -328,7 +372,8 @@ for tag in ("sepolicy", "vndk", "kernel"):
     for el in root.findall(tag):
         root.remove(el)
 DROP_HALS = {
-    "android.hardware.radio", "android.hardware.radio.deprecated",
+    # The stock RIL still registers IOemHook; Android 13 has no client for it.
+    "android.hardware.radio.deprecated",
     "android.hardware.biometrics.fingerprint", "android.hardware.broadcastradio",
     "android.hardware.soundtrigger",
 }

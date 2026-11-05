@@ -1,0 +1,5 @@
+# vendor_init cannot create anything under /data/misc on Android 13, so the
+# mkdir in the stock init.mt6797.rc fails silently. mnld keeps its config,
+# receiver state and EPO data in this folder.
+on post-fs-data
+    mkdir /data/misc/gps 0770 gps system

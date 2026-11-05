@@ -18,6 +18,10 @@ allow vendor_init { mnld_data_file nfc_socket }:dir create_dir_perms;
 allow vendor_init nvcfg_file:dir { setattr r_dir_perms relabelfrom };
 allow vendor_init rootfs:dir { setattr r_dir_perms };
 
+# The camera HAL3 switch lives in /vendor/build.prop, which init applies as
+# vendor_init. Without this, a fresh /data comes up with no cameras.
+set_prop(vendor_init, mtkcam_prop)
+
 # Kernel firmware loading (WMT, Wi-Fi, BT patches) reads /vendor/firmware.
 allow kernel vendor_fw_file:dir search;
 allow kernel vendor_fw_file:file r_file_perms;
