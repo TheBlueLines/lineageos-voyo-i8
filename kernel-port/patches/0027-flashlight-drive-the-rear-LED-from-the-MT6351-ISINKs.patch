@@ -1,0 +1,96 @@
+diff --git a/kernel-3.18/drivers/misc/mediatek/flashlight/src/mt6797/constant_flashlight/leds_strobe.c b/kernel-3.18/drivers/misc/mediatek/flashlight/src/mt6797/constant_flashlight/leds_strobe.c
+index eb12e2f40..27bc1495c 100644
+--- a/kernel-3.18/drivers/misc/mediatek/flashlight/src/mt6797/constant_flashlight/leds_strobe.c
++++ b/kernel-3.18/drivers/misc/mediatek/flashlight/src/mt6797/constant_flashlight/leds_strobe.c
+@@ -299,11 +299,64 @@ static int LM3643_read_reg(struct i2c_client *client, u8 reg)
+ 	return 0;
+ }
+ */
++
++/*
++ * VOYO i8: the rear LED hangs off the MT6351 ISINK current sinks, not the
++ * LM3643 outputs. Stock reprograms all four sinks in init_lm3643() and flips
++ * their enable bits in flashEnable/flashDisable_lm3643_1(), then still does
++ * the I2C write. Values and order are taken from the stock kernel; raw register
++ * addresses are used so they cannot drift with the PMU flag enum.
++ */
++extern unsigned int pmic_config_interface(unsigned int RegNum, unsigned int val,
++					  unsigned int MASK, unsigned int SHIFT);
++
++#define VOYO_TOP_CKPDN_CON0	0x023A
++#define VOYO_TOP_CKPDN_CON5	0x0258
++#define VOYO_ISINK_CKSEL0	0x025E
++#define VOYO_ISINK_CKSEL1	0x0264
++#define VOYO_ISINK_EN_CTRL	0x0836
++#define VOYO_ISINK_MODE_CTRL	0x0838
++#define VOYO_ISINK_FSEL_FAST	0x0000
++#define VOYO_ISINK_STEP		5
++#define VOYO_ISINK_DUTY		15
++
++static void voyo_isink_channel(unsigned int ckpdn, unsigned int ckpdn_shift,
++			       unsigned int cksel, unsigned int cksel_shift,
++			       unsigned int mode_shift, unsigned int con0)
++{
++	pmic_config_interface(ckpdn, 0, 1, ckpdn_shift);
++	pmic_config_interface(cksel, 0, 1, cksel_shift);
++	pmic_config_interface(VOYO_ISINK_MODE_CTRL, 0, 3, mode_shift);
++	pmic_config_interface(con0 + 2, VOYO_ISINK_STEP, 7, 12);
++	pmic_config_interface(con0 + 2, VOYO_ISINK_DUTY, 0x1F, 7);
++	pmic_config_interface(con0, VOYO_ISINK_FSEL_FAST, 0xFFFF, 0);
++}
++
++static void voyo_isink_init(void)
++{
++	voyo_isink_channel(VOYO_TOP_CKPDN_CON0, 4, VOYO_ISINK_CKSEL0, 2, 14, 0x0810);
++	voyo_isink_channel(VOYO_TOP_CKPDN_CON0, 5, VOYO_ISINK_CKSEL0, 3, 12, 0x0818);
++	voyo_isink_channel(VOYO_TOP_CKPDN_CON5, 9, VOYO_ISINK_CKSEL1, 5, 10, 0x0820);
++	voyo_isink_channel(VOYO_TOP_CKPDN_CON5, 10, VOYO_ISINK_CKSEL1, 6, 8, 0x0828);
++}
++
++static void voyo_isink_enable(unsigned int on)
++{
++	int ch;
++
++	if (on)
++		pmic_config_interface(VOYO_TOP_CKPDN_CON0, 0, 1, 3);
++	for (ch = 0; ch < 4; ch++)
++		pmic_config_interface(VOYO_ISINK_EN_CTRL, on ? 1 : 0, 1, ch);
++}
++
+ int flashEnable_lm3643_1(void)
+ {
+ 	int ret;
+ 	char buf[2];
+ 
++	voyo_isink_enable(1);
++
+ 	buf[0] = 0x01; /* Enable Register */
+ 	if (g_IsTorch[g_duty1] == 1) /* LED1 in torch mode */
+ 		g_EnableReg |= (0x09);
+@@ -334,6 +387,8 @@ int flashDisable_lm3643_1(void)
+ 	int ret;
+ 	char buf[2];
+ 
++	voyo_isink_enable(0);
++
+ 	buf[0] = 0x01; /* Enable Register */
+ 	if ((g_EnableReg&0x02) == 0x02) /* LED2 enabled */
+ 		g_EnableReg &= (~0x01);
+@@ -406,7 +461,8 @@ int init_lm3643(void)
+ 	int ret;
+ 	char buf[2];
+ 
+-	flashlight_gpio_set(FLASHLIGHT_PIN_HWEN, STATE_HIGH);
++	/* Stock never touches HWEN on this board. */
++	voyo_isink_init();
+ 
+ 	buf[0] = 0x01; /* Enable Register */
+ 	buf[1] = 0x00;
+@@ -456,7 +512,6 @@ int FL_Init(void)
+ int FL_Uninit(void)
+ {
+ 	FL_Disable();
+-	flashlight_gpio_set(FLASHLIGHT_PIN_HWEN, STATE_LOW);
+ 	return 0;
+ }
+ 
