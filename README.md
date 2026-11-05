@@ -26,9 +26,12 @@ Tested on one tablet.
 | Signing | Private release keys (`dev-keys`), so the Trust app reports the build as signed |
 | Security patch | Shows 2026-02-01. LineageOS 20 gets community ASB backports, up to about October 2026, without bumping that date |
 | Audio output | Sound card registers and the audio HAL writes to it; speaker and headphone output not yet checked by ear |
-| Camera | **Not working**: the camera HAL crashes during sensor detection, so it is disabled |
-| Hardware video decoding | OMX runs, but the software Codec2 decoders are picked first |
-| GPS, sensors, USB OTG | Untested |
+| Camera | Rear (GC5005) and front (GC2235) photos and preview work. Rear LED works as torch and photo flash; flash auto is unconfirmed in the dark. Front video tops out near 15 fps, the sensor's limit. Rear video shows faint thin lines, cause unknown |
+| Video recording | 1080p H.264 through the hardware OMX encoder |
+| Hardware video decoding | Not used: the Android 8 OMX store lists no codecs, so only its encoders are added by hand and playback stays on the software Codec2 decoders |
+| GPS | Daemon starts, stops and streams NMEA repeatedly without crashing; a satellite fix has not been confirmed |
+| SIM and cellular | The SIM is detected and Android asks for its PIN. Network registration, calls, SMS and mobile data not yet tested |
+| Sensors, USB OTG | Untested |
 | Display refresh | 48.3 Hz, the panel's stock rate |
 
 Known bring-up leftovers: `adb reboot` from Android lands in TWRP once (the `voyo_failsafe` RTC mark;
@@ -87,7 +90,8 @@ Recovery and Vol Down to confirm.
   `x970_t10_97inc_defconfig` is the kernel config. `lcm/` and `touch/` are the panel and touch
   drivers, which were written from disassembly of the stock kernel.
 - `patches`: changes to LineageOS 20 projects (`hardware/interfaces` for the Android 8 audio HAL,
-  `external/setupcompat` for the setup wizard layout on tablets).
+  `external/setupcompat` for the setup wizard layout on tablets, `frameworks/av` and
+  `system/libhwbinder` for camera, flash and hardware encoding on the Android 8 blobs).
 - `analysis`: the board device tree (`dtb0.dtb`, appended to the kernel) and live device-tree dumps.
 - `scripts`: build, flash and debugging helpers. They expect the WSL distro `TWRP-Builder` with
   the LineageOS tree in `~/los` and the kernel in `~/los-kernel/gemini8`, and this checkout at
