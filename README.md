@@ -29,7 +29,7 @@ Tested on one tablet.
 | Camera | Rear (GC5005) and front (GC2235) photos and preview work. Rear LED works as torch and photo flash; flash auto is unconfirmed in the dark. Front video tops out near 15 fps, the sensor's limit. Rear video shows faint thin lines, cause unknown |
 | Video recording | 1080p H.264 through the hardware OMX encoder |
 | Hardware video decoding | Not used: the Android 8 OMX store lists no codecs, so only its encoders are added by hand and playback stays on the software Codec2 decoders |
-| GPS | Daemon starts, stops and streams NMEA repeatedly without crashing; a satellite fix has not been confirmed |
+| GPS | Real outdoor fix confirmed on GPS, GLONASS and BeiDou (first fix in 8 s with LTE data, 11 satellites used, about 2 m accuracy). Not yet tested without mobile data |
 | SIM and cellular | The SIM is detected and Android asks for its PIN. Network registration, calls, SMS and mobile data not yet tested |
 | Sensors, USB OTG | Untested |
 | Display refresh | 48.3 Hz, the panel's stock rate |
