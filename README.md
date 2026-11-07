@@ -16,7 +16,7 @@ Tested on one tablet.
 
 | Feature | State |
 |---|---|
-| Boot, display, touch, sleep and wake | Working; the tablet deep-sleeps with the screen off (about 96% of an 8.5-hour screen-off run with Wi-Fi connected, about 1% battery per hour) |
+| Boot, display, touch, sleep and wake | Working; the tablet deep-sleeps with the screen off (about 96% of an 8.5-hour screen-off run with Wi-Fi connected, about 1% battery per hour; about 99% after the first hour of a 4.3-hour run with Wi-Fi connected, airplane mode on and no SIM, about 1% battery in total) |
 | Wi-Fi (2.4 and 5 GHz) | Working |
 | Bluetooth | Working |
 | Battery and charging | Working |
