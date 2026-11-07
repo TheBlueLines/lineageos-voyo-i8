@@ -274,8 +274,18 @@ with open(mnl, "rb") as f:
 old = bytes.fromhex("064b7b4403eb8000" "f6f728ea" "002814bf")
 new = bytes.fromhex("064b7b4403eb8000" "002000bf" "002814bf")
 assert data.count(old) == 1, "libmnl mutex destroy wrapper not found"
+data = data.replace(old, new)
+# Satellites send the week modulo 1024. With no reference time, libmnl picks the
+# era from a window that ended in 2025, so fixes read 1024 weeks early (2007).
+# Two copies pick +2048 below a threshold and +1024 above it: always use +2048,
+# which maps every week into 2019-2038.
+for old, new in (("00f5006000f58060", "00f5006000f50060"),
+                 ("02f5006202f58062", "02f5006202f50062")):
+    old, new = bytes.fromhex(old), bytes.fromhex(new)
+    assert data.count(old) == 1, "libmnl week era site not found"
+    data = data.replace(old, new)
 with open(mnl, "wb") as f:
-    f.write(data.replace(old, new))
+    f.write(data)
 
 # 5b1a. The GPS HAL forwards measurements and navigation messages through
 # callback tables it never checks. mnld keeps sending them after the HAL restarts,
