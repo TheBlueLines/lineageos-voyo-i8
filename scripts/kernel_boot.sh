@@ -4,22 +4,22 @@
 # which is what the tablet runs). Usage: kernel_boot.sh <out.img> [ref.img]
 set -e
 A='/mnt/c/Users/David/Voyo i8/LineageOS'
-P=$HOME/los/out/target/product/x970_t10_97inc
-H=$HOME/los/out/host/linux-x86/bin
+P=$HOME/los24/out/target/product/x970_t10_97inc
+H=$HOME/los24/system/tools/mkbootimg
 K=$HOME/los-kernel/gemini8/kernel-3.18/out/arch/arm64/boot/Image.gz
 OUT=$1; REF=${2:-$P/boot.img}
 T=$(mktemp -d)
-INFO=$($H/unpack_bootimg --boot_img "$REF" --out $T/old)
+INFO=$(python3 $H/unpack_bootimg.py --boot_img "$REF" --out $T/old)
 OSV=$(echo "$INFO" | sed -n 's/^os version: //p')
 OSP=$(echo "$INFO" | sed -n 's/^os patch level: //p')
 CMD=$(echo "$INFO" | sed -n 's/^command line args: //p')
 cat $K "$A/analysis/dtb0.dtb" > $T/kernel
-$H/mkbootimg --kernel $T/kernel --ramdisk $T/old/ramdisk \
+python3 $H/mkbootimg.py --kernel $T/kernel --ramdisk $T/old/ramdisk \
   --base 0x40078000 --kernel_offset 0x00008000 --ramdisk_offset 0x04f88000 \
   --second_offset 0x00e88000 --tags_offset 0x03f88000 --pagesize 2048 \
   --header_version 0 --os_version "$OSV" --os_patch_level "$OSP" \
   --cmdline "$CMD" -o "$OUT"
-$H/unpack_bootimg --boot_img "$OUT" --out $T/new > $T/new.txt
+python3 $H/unpack_bootimg.py --boot_img "$OUT" --out $T/new > $T/new.txt
 # Everything but the kernel must be identical to the reference.
 diff <(echo "$INFO" | grep -v -E '^kernel') <(grep -v -E '^kernel' $T/new.txt)
 cmp $T/old/ramdisk $T/new/ramdisk

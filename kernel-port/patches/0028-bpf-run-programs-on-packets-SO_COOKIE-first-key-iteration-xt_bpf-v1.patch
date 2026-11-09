@@ -1,0 +1,817 @@
+diff --git a/kernel-3.18/include/linux/bpf-cgroup.h b/kernel-3.18/include/linux/bpf-cgroup.h
+new file mode 100644
+index 000000000..8edbdd04d
+--- /dev/null
++++ b/kernel-3.18/include/linux/bpf-cgroup.h
+@@ -0,0 +1,74 @@
++#ifndef _BPF_CGROUP_H
++#define _BPF_CGROUP_H
++
++#include <linux/skbuff.h>
++#include <net/sock.h>
++
++/*
++ * Run path for BPF_PROG_TYPE_CGROUP_SKB programs on 3.18.
++ *
++ * Android attaches its accounting programs to the root cgroup only, so one
++ * global program per direction stands in for 4.10's per-cgroup lists.
++ *
++ * The verifier here has no convert_ctx_access, so programs see a real
++ * struct holding the uapi __sk_buff fields they read. The skb sits past the
++ * range programs may read, and only the helpers use it.
++ */
++#define BPF_SKB_CTX_PUBLIC_SIZE	256
++
++struct bpf_skb_ctx {
++	u32 len;
++	u32 pkt_type;
++	u32 mark;
++	u32 queue_mapping;
++	u32 protocol;
++	u32 vlan_present;
++	u32 vlan_tci;
++	u32 vlan_proto;
++	u32 priority;
++	u32 ingress_ifindex;
++	u32 ifindex;
++	u32 tc_index;
++	u32 cb[5];
++	u32 hash;
++	u32 tc_classid;
++	u32 data;
++	u32 data_end;
++	u32 pad[(BPF_SKB_CTX_PUBLIC_SIZE - 84) / 4];
++	struct sk_buff *skb;
++};
++
++#ifdef CONFIG_BPF_SYSCALL
++/* 0: off, 1: run but ignore drops, 2: enforce */
++extern int sysctl_bpf_cgroup_mode;
++extern int sysctl_bpf_cgroup_runs[2];
++extern int sysctl_bpf_cgroup_drops[2];
++
++void bpf_cgroup_global_set(u32 type, struct bpf_prog *prog);
++u32 bpf_skb_prog_run(const struct bpf_prog *prog, struct sk_buff *skb);
++int __bpf_cgroup_run_skb(struct sock *sk, struct sk_buff *skb, u32 type);
++
++static inline int bpf_cgroup_run_ingress(struct sock *sk, struct sk_buff *skb)
++{
++	return sysctl_bpf_cgroup_mode ?
++	       __bpf_cgroup_run_skb(sk, skb, BPF_CGROUP_INET_INGRESS) : 0;
++}
++
++static inline int bpf_cgroup_run_egress(struct sk_buff *skb)
++{
++	return sysctl_bpf_cgroup_mode && skb->sk ?
++	       __bpf_cgroup_run_skb(skb->sk, skb, BPF_CGROUP_INET_EGRESS) : 0;
++}
++#else
++static inline int bpf_cgroup_run_ingress(struct sock *sk, struct sk_buff *skb)
++{
++	return 0;
++}
++
++static inline int bpf_cgroup_run_egress(struct sk_buff *skb)
++{
++	return 0;
++}
++#endif
++
++#endif /* _BPF_CGROUP_H */
+diff --git a/kernel-3.18/include/linux/bpf.h b/kernel-3.18/include/linux/bpf.h
+index 217762aa9..5aa30900c 100644
+--- a/kernel-3.18/include/linux/bpf.h
++++ b/kernel-3.18/include/linux/bpf.h
+@@ -112,6 +112,7 @@ void bpf_prog_put_rcu(struct bpf_prog *prog);
+ int bpf_obj_pin_user(u32 ufd, const char __user *pathname);
+ int bpf_get_file_flag(int flags);
+ int bpf_obj_get_user(const char __user *pathname, int flags);
++struct bpf_prog *bpf_prog_get_type_path(const char *name, enum bpf_prog_type type);
+ 
+ /* The pinned objects are handed out as ordinary bpf fds, so the bpf
+  * filesystem uses these very file_operations on its inodes. */
+diff --git a/kernel-3.18/include/net/sock.h b/kernel-3.18/include/net/sock.h
+index bb30768ea..ab497ae6a 100644
+--- a/kernel-3.18/include/net/sock.h
++++ b/kernel-3.18/include/net/sock.h
+@@ -423,6 +423,7 @@ struct sock {
+ 	void			*sk_security;
+ #endif
+ 	__u32			sk_mark;
++	atomic64_t		sk_cookie;
+ 	kuid_t			sk_uid;
+ 	u32			sk_classid;
+ 	struct cg_proto		*sk_cgrp;
+@@ -1593,6 +1594,7 @@ void sock_edemux(struct sk_buff *skb);
+ int sock_setsockopt(struct socket *sock, int level, int op,
+ 		    char __user *optval, unsigned int optlen);
+ 
++u64 sock_gen_cookie(struct sock *sk);
+ int sock_getsockopt(struct socket *sock, int level, int op,
+ 		    char __user *optval, int __user *optlen);
+ struct sk_buff *sock_alloc_send_skb(struct sock *sk, unsigned long size,
+diff --git a/kernel-3.18/include/uapi/asm-generic/socket.h b/kernel-3.18/include/uapi/asm-generic/socket.h
+index ea0796bdc..5495fe6e7 100644
+--- a/kernel-3.18/include/uapi/asm-generic/socket.h
++++ b/kernel-3.18/include/uapi/asm-generic/socket.h
+@@ -82,4 +82,6 @@
+ 
+ #define SO_BPF_EXTENSIONS	48
+ 
++#define SO_COOKIE		57
++
+ #endif /* __ASM_GENERIC_SOCKET_H */
+diff --git a/kernel-3.18/include/uapi/linux/netfilter/xt_bpf.h b/kernel-3.18/include/uapi/linux/netfilter/xt_bpf.h
+index 1fad2c27a..e5deded8a 100644
+--- a/kernel-3.18/include/uapi/linux/netfilter/xt_bpf.h
++++ b/kernel-3.18/include/uapi/linux/netfilter/xt_bpf.h
+@@ -16,4 +16,26 @@ struct xt_bpf_info {
+ 	struct bpf_prog *filter __attribute__((aligned(8)));
+ };
+ 
++enum xt_bpf_modes {
++	XT_BPF_MODE_BYTECODE,
++	XT_BPF_MODE_FD_PINNED,
++	XT_BPF_MODE_FD_ELF,
++};
++#define XT_BPF_MODE_PATH_PINNED XT_BPF_MODE_FD_PINNED
++
++#define XT_BPF_PATH_MAX	(XT_BPF_MAX_NUM_INSTR * sizeof(struct sock_filter))
++
++struct xt_bpf_info_v1 {
++	__u16 mode;
++	__u16 bpf_program_num_elem;
++	__s32 fd;
++	union {
++		struct sock_filter bpf_program[XT_BPF_MAX_NUM_INSTR];
++		char path[XT_BPF_PATH_MAX];
++	};
++
++	/* only used in the kernel */
++	struct bpf_prog *filter __attribute__((aligned(8)));
++};
++
+ #endif /*_XT_BPF_H */
+diff --git a/kernel-3.18/kernel/bpf/Makefile b/kernel-3.18/kernel/bpf/Makefile
+index 8c0923f11..a85727ad4 100644
+--- a/kernel-3.18/kernel/bpf/Makefile
++++ b/kernel-3.18/kernel/bpf/Makefile
+@@ -1,5 +1,5 @@
+ obj-y := core.o
+-obj-$(CONFIG_BPF_SYSCALL) += syscall.o verifier.o inode.o arraymap.o hashtab.o helpers.o progtypes.o cgroup_stub.o
++obj-$(CONFIG_BPF_SYSCALL) += syscall.o verifier.o inode.o arraymap.o hashtab.o helpers.o progtypes.o cgroup_stub.o cgroup_run.o
+ ifdef CONFIG_TEST_BPF
+ obj-$(CONFIG_BPF_SYSCALL) += test_stub.o
+ endif
+diff --git a/kernel-3.18/kernel/bpf/arraymap.c b/kernel-3.18/kernel/bpf/arraymap.c
+index 1ba13a68f..74206a02d 100644
+--- a/kernel-3.18/kernel/bpf/arraymap.c
++++ b/kernel-3.18/kernel/bpf/arraymap.c
+@@ -77,7 +77,7 @@ static void *array_map_lookup_elem(struct bpf_map *map, void *key)
+ static int array_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
+ {
+ 	struct bpf_array *array = container_of(map, struct bpf_array, map);
+-	u32 index = *(u32 *)key;
++	u32 index = key ? *(u32 *)key : U32_MAX;
+ 	u32 *next = (u32 *)next_key;
+ 
+ 	if (index >= array->map.max_entries) {
+diff --git a/kernel-3.18/kernel/bpf/cgroup_run.c b/kernel-3.18/kernel/bpf/cgroup_run.c
+new file mode 100644
+index 000000000..08b0504a6
+--- /dev/null
++++ b/kernel-3.18/kernel/bpf/cgroup_run.c
+@@ -0,0 +1,117 @@
++/*
++ * Run path for cgroup skb programs, see include/linux/bpf-cgroup.h.
++ *
++ * The hooks follow 4.10: ingress in sk_filter(), egress before the output
++ * path fragments the packet, both with skb->data at the network header.
++ */
++
++#include <linux/bpf.h>
++#include <linux/bpf-cgroup.h>
++#include <linux/export.h>
++#include <linux/filter.h>
++#include <linux/if_vlan.h>
++#include <linux/mutex.h>
++#include <linux/netdevice.h>
++#include <linux/rcupdate.h>
++
++int sysctl_bpf_cgroup_mode __read_mostly;
++int sysctl_bpf_cgroup_runs[2];
++int sysctl_bpf_cgroup_drops[2];
++
++static struct bpf_prog __rcu *bpf_cgroup_global[2];
++static DEFINE_MUTEX(bpf_cgroup_global_lock);
++
++/* Holds its own reference: the cgroup slot can be dropped independently. */
++void bpf_cgroup_global_set(u32 type, struct bpf_prog *prog)
++{
++	struct bpf_prog *old;
++
++	if (type > BPF_CGROUP_INET_EGRESS)
++		return;
++	if (prog && prog->aux->prog_type != BPF_PROG_TYPE_CGROUP_SKB)
++		return;
++
++	if (prog)
++		atomic_inc(&prog->aux->refcnt);
++
++	mutex_lock(&bpf_cgroup_global_lock);
++	old = rcu_dereference_protected(bpf_cgroup_global[type],
++			lockdep_is_held(&bpf_cgroup_global_lock));
++	rcu_assign_pointer(bpf_cgroup_global[type], prog);
++	mutex_unlock(&bpf_cgroup_global_lock);
++
++	if (old) {
++		synchronize_rcu();
++		bpf_prog_put(old);
++	}
++}
++
++static void bpf_skb_ctx_fill(struct bpf_skb_ctx *ctx, struct sk_buff *skb)
++{
++	memset(ctx, 0, sizeof(*ctx));
++	ctx->len = skb->len;
++	ctx->pkt_type = skb->pkt_type;
++	ctx->mark = skb->mark;
++	ctx->queue_mapping = skb->queue_mapping;
++	ctx->protocol = skb->protocol;
++	ctx->vlan_present = !!vlan_tx_tag_present(skb);
++	ctx->vlan_tci = vlan_tx_tag_get(skb);
++	ctx->vlan_proto = skb->vlan_proto;
++	ctx->priority = skb->priority;
++	ctx->ingress_ifindex = skb->skb_iif;
++	ctx->ifindex = skb->dev ? skb->dev->ifindex : 0;
++	ctx->hash = skb->hash;
++	ctx->skb = skb;
++}
++
++/* For programs run outside the cgroup path: xt_bpf's pinned mode. */
++u32 bpf_skb_prog_run(const struct bpf_prog *prog, struct sk_buff *skb)
++{
++	struct bpf_skb_ctx ctx;
++
++	bpf_skb_ctx_fill(&ctx, skb);
++	return BPF_PROG_RUN(prog, (void *)&ctx);
++}
++EXPORT_SYMBOL_GPL(bpf_skb_prog_run);
++
++int __bpf_cgroup_run_skb(struct sock *sk, struct sk_buff *skb, u32 type)
++{
++	struct bpf_skb_ctx ctx;
++	struct bpf_prog *prog;
++	struct sock *save_sk;
++	unsigned int offset;
++	u32 verdict;
++
++	if (sk->sk_family != AF_INET && sk->sk_family != AF_INET6)
++		return 0;
++	if (!sk_fullsock(sk))
++		return 0;
++	if (skb->data < skb_network_header(skb))
++		return 0;
++
++	rcu_read_lock();
++	prog = rcu_dereference(bpf_cgroup_global[type]);
++	if (!prog) {
++		rcu_read_unlock();
++		return 0;
++	}
++
++	save_sk = skb->sk;
++	skb->sk = sk;
++	offset = skb->data - skb_network_header(skb);
++	__skb_push(skb, offset);
++
++	bpf_skb_ctx_fill(&ctx, skb);
++	verdict = BPF_PROG_RUN(prog, (void *)&ctx);
++
++	__skb_pull(skb, offset);
++	skb->sk = save_sk;
++	rcu_read_unlock();
++
++	sysctl_bpf_cgroup_runs[type]++;
++	if (verdict & 1)
++		return 0;
++
++	sysctl_bpf_cgroup_drops[type]++;
++	return sysctl_bpf_cgroup_mode >= 2 ? -EPERM : 0;
++}
+diff --git a/kernel-3.18/kernel/bpf/cgroup_stub.c b/kernel-3.18/kernel/bpf/cgroup_stub.c
+index 19ace577b..e706757db 100644
+--- a/kernel-3.18/kernel/bpf/cgroup_stub.c
++++ b/kernel-3.18/kernel/bpf/cgroup_stub.c
+@@ -6,13 +6,15 @@
+  * cgroup (only cgroup directory fds are supported) and store/clear the
+  * program in the cgroup's bpf_stub_progs[] slot.
+  *
+- * There is no run path: no packet-path hooks, no effective-program
+- * computation and no multi-program lists on 3.18 (modelled on 4.9
+- * kernel/bpf/cgroup.c). Attached programs are never executed, so
+- * BPF_F_ALLOW_MULTI is a simple replace and other attach flags are ignored.
++ * There is no effective-program computation and no multi-program list on
++ * 3.18 (modelled on 4.9 kernel/bpf/cgroup.c), so BPF_F_ALLOW_MULTI is a
++ * simple replace and other attach flags are ignored. Skb programs run
++ * through kernel/bpf/cgroup_run.c whichever cgroup they were attached to;
++ * the other attach types are stored and never executed.
+  */
+ 
+ #include <linux/bpf.h>
++#include <linux/bpf-cgroup.h>
+ #include <linux/cgroup.h>
+ #include <linux/err.h>
+ #include <linux/errno.h>
+@@ -21,7 +23,7 @@
+ 
+ /* Serializes attach vs detach vs destroy-path release.  Programs are only
+  * ever swapped under this lock; the old reference is dropped after unlock
+- * (bpf_prog_put() may sleep).  There are no run-path readers. */
++ * (bpf_prog_put() may sleep). */
+ static DEFINE_SPINLOCK(cgroup_bpf_stub_lock);
+ 
+ /* Resolve a cgroup-directory fd to its cgroup, holding a css reference.
+@@ -85,6 +87,7 @@ int bpf_cgroup_attach_stub(struct cgroup *cgrp, struct bpf_prog *prog,
+ 	if (old)
+ 		bpf_prog_put(old);
+ 
++	bpf_cgroup_global_set(type, prog);
+ 	return 0;
+ }
+ 
+@@ -104,6 +107,7 @@ int bpf_cgroup_detach_stub(struct cgroup *cgrp, u32 type)
+ 	if (!old)
+ 		return -ENOENT;
+ 
++	bpf_cgroup_global_set(type, NULL);
+ 	bpf_prog_put(old);
+ 	return 0;
+ }
+diff --git a/kernel-3.18/kernel/bpf/hashtab.c b/kernel-3.18/kernel/bpf/hashtab.c
+index fdde20520..d1f58f584 100644
+--- a/kernel-3.18/kernel/bpf/hashtab.c
++++ b/kernel-3.18/kernel/bpf/hashtab.c
+@@ -176,6 +176,11 @@ static int htab_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
+ 
+ 	key_size = map->key_size;
+ 
++	if (!key) {
++		i = 0;
++		goto find_first_elem;
++	}
++
+ 	hash = htab_map_hash(key, key_size);
+ 
+ 	head = select_bucket(htab, hash);
+diff --git a/kernel-3.18/kernel/bpf/helpers.c b/kernel-3.18/kernel/bpf/helpers.c
+index bdddb78fa..86debfb49 100644
+--- a/kernel-3.18/kernel/bpf/helpers.c
++++ b/kernel-3.18/kernel/bpf/helpers.c
+@@ -10,6 +10,7 @@
+  * General Public License for more details.
+  */
+ #include <linux/bpf.h>
++#include <linux/bpf-cgroup.h>
+ #include <linux/rcupdate.h>
+ #include <linux/random.h>
+ #include <linux/smp.h>
+@@ -264,13 +265,22 @@ const struct bpf_func_proto bpf_redirect_proto = {
+ 	.arg2_type	= ARG_ANYTHING,
+ };
+ 
+-static u64 bpf_skb_load_bytes_stub(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++static u64 bpf_skb_load_bytes(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
+ {
+-	return -EOPNOTSUPP;
++	struct bpf_skb_ctx *ctx = (struct bpf_skb_ctx *)(unsigned long)r1;
++	void *to = (void *)(unsigned long)r3;
++	int offset = (int)r2;
++	u32 len = (u32)r4;
++
++	if (offset >= 0 && !skb_copy_bits(ctx->skb, offset, to, len))
++		return 0;
++
++	memset(to, 0, len);
++	return -EFAULT;
+ }
+ 
+ const struct bpf_func_proto bpf_skb_load_bytes_proto = {
+-	.func		= bpf_skb_load_bytes_stub,
++	.func		= bpf_skb_load_bytes,
+ 	.gpl_only	= false,
+ 	.ret_type	= RET_INTEGER,
+ 	.arg1_type	= ARG_PTR_TO_CTX,
+@@ -333,29 +343,36 @@ const struct bpf_func_proto bpf_skb_change_head_proto = {
+ 	.arg3_type	= ARG_ANYTHING,
+ };
+ 
+-/* Stub: 3.18's struct sock has no sk_cookie; return 0, upstream's
+- * "no socket" answer. */
+-static u64 bpf_get_socket_cookie_stub(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++static u64 bpf_get_socket_cookie(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
+ {
+-	return 0;
++	struct bpf_skb_ctx *ctx = (struct bpf_skb_ctx *)(unsigned long)r1;
++	struct sock *sk = ctx->skb->sk;
++
++	return sk && sk_fullsock(sk) ? sock_gen_cookie(sk) : 0;
+ }
+ 
+ const struct bpf_func_proto bpf_get_socket_cookie_proto = {
+-	.func		= bpf_get_socket_cookie_stub,
++	.func		= bpf_get_socket_cookie,
+ 	.gpl_only	= false,
+ 	.ret_type	= RET_INTEGER,
+ 	.arg1_type	= ARG_PTR_TO_CTX,
+ };
+ 
+-/* Stub: 3.18's struct sock has no sk_uid; return overflowuid, upstream's
+- * "no socket" answer. */
+-static u64 bpf_get_socket_uid_stub(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
++/* 3.18's struct sock has no sk_uid, so a socket that lost its inode reads as
++ * root, which only affects packets sent after close(). */
++static u64 bpf_get_socket_uid(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
+ {
+-	return overflowuid;
++	struct bpf_skb_ctx *ctx = (struct bpf_skb_ctx *)(unsigned long)r1;
++	struct sock *sk = ctx->skb->sk;
++
++	if (!sk || !sk_fullsock(sk))
++		return overflowuid;
++
++	return from_kuid_munged(sock_net(sk)->user_ns, sock_i_uid(sk));
+ }
+ 
+ const struct bpf_func_proto bpf_get_socket_uid_proto = {
+-	.func		= bpf_get_socket_uid_stub,
++	.func		= bpf_get_socket_uid,
+ 	.gpl_only	= false,
+ 	.ret_type	= RET_INTEGER,
+ 	.arg1_type	= ARG_PTR_TO_CTX,
+diff --git a/kernel-3.18/kernel/bpf/inode.c b/kernel-3.18/kernel/bpf/inode.c
+index a69349af2..0069e138b 100644
+--- a/kernel-3.18/kernel/bpf/inode.c
++++ b/kernel-3.18/kernel/bpf/inode.c
+@@ -315,6 +315,31 @@ out:
+ 	return ERR_PTR(ret);
+ }
+ 
++/* @name is a kernel string. 4.14's helper for xt_bpf's pinned mode. */
++struct bpf_prog *bpf_prog_get_type_path(const char *name, enum bpf_prog_type type)
++{
++	enum bpf_type objtype;
++	struct bpf_prog *prog;
++	void *raw;
++
++	raw = bpf_obj_do_get(name, &objtype, O_RDONLY);
++	if (IS_ERR(raw))
++		return raw;
++
++	if (objtype != BPF_TYPE_PROG) {
++		bpf_any_put(raw, objtype);
++		return ERR_PTR(-EINVAL);
++	}
++
++	prog = raw;
++	if (prog->aux->prog_type != type) {
++		bpf_prog_put(prog);
++		return ERR_PTR(-EINVAL);
++	}
++
++	return prog;
++}
++
+ int bpf_obj_get_user(const char __user *pathname, int flags)
+ {
+ 	enum bpf_type type = BPF_TYPE_UNSPEC;
+diff --git a/kernel-3.18/kernel/bpf/syscall.c b/kernel-3.18/kernel/bpf/syscall.c
+index f73609344..865483223 100644
+--- a/kernel-3.18/kernel/bpf/syscall.c
++++ b/kernel-3.18/kernel/bpf/syscall.c
+@@ -391,14 +391,18 @@ static int map_get_next_key(union bpf_attr *attr)
+ 	if (IS_ERR(map))
+ 		return PTR_ERR(map);
+ 
+-	err = -ENOMEM;
+-	key = kmalloc(map->key_size, GFP_USER);
+-	if (!key)
+-		goto err_put;
+-
+-	err = -EFAULT;
+-	if (copy_from_user(key, ukey, map->key_size) != 0)
+-		goto free_key;
++	if (ukey) {
++		err = -ENOMEM;
++		key = kmalloc(map->key_size, GFP_USER);
++		if (!key)
++			goto err_put;
++
++		err = -EFAULT;
++		if (copy_from_user(key, ukey, map->key_size) != 0)
++			goto free_key;
++	} else {
++		key = NULL;
++	}
+ 
+ 	err = -ENOMEM;
+ 	next_key = kmalloc(map->key_size, GFP_USER);
+diff --git a/kernel-3.18/net/core/filter.c b/kernel-3.18/net/core/filter.c
+index e6cde1738..f2c01fb22 100644
+--- a/kernel-3.18/net/core/filter.c
++++ b/kernel-3.18/net/core/filter.c
+@@ -41,6 +41,7 @@
+ #include <asm/uaccess.h>
+ #include <asm/unaligned.h>
+ #include <linux/filter.h>
++#include <linux/bpf-cgroup.h>
+ #include <linux/ratelimit.h>
+ #include <linux/seccomp.h>
+ #include <linux/if_vlan.h>
+@@ -74,6 +75,10 @@ int sk_filter(struct sock *sk, struct sk_buff *skb)
+ 	if (err)
+ 		return err;
+ 
++	err = bpf_cgroup_run_ingress(sk, skb);
++	if (err)
++		return err;
++
+ 	rcu_read_lock();
+ 	filter = rcu_dereference(sk->sk_filter);
+ 	if (filter) {
+diff --git a/kernel-3.18/net/core/sock.c b/kernel-3.18/net/core/sock.c
+index 39ed21914..65bbfc630 100644
+--- a/kernel-3.18/net/core/sock.c
++++ b/kernel-3.18/net/core/sock.c
+@@ -1000,6 +1000,21 @@ static void cred_to_ucred(struct pid *pid, const struct cred *cred,
+ 	}
+ }
+ 
++u64 sock_gen_cookie(struct sock *sk)
++{
++	static atomic64_t cookie_gen;
++
++	for (;;) {
++		u64 cookie = atomic64_read(&sk->sk_cookie);
++
++		if (cookie)
++			return cookie;
++		cookie = atomic64_inc_return(&cookie_gen);
++		atomic64_cmpxchg(&sk->sk_cookie, 0, cookie);
++	}
++}
++EXPORT_SYMBOL_GPL(sock_gen_cookie);
++
+ int sock_getsockopt(struct socket *sock, int level, int optname,
+ 		    char __user *optval, int __user *optlen)
+ {
+@@ -1007,6 +1022,7 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
+ 
+ 	union {
+ 		int val;
++		u64 val64;
+ 		struct linger ling;
+ 		struct timeval tm;
+ 	} v;
+@@ -1233,6 +1249,13 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
+ 		v.val = sk->sk_max_pacing_rate;
+ 		break;
+ 
++	case SO_COOKIE:
++		lv = sizeof(u64);
++		if (len < lv)
++			return -EINVAL;
++		v.val64 = sock_gen_cookie(sk);
++		break;
++
+ 	default:
+ 		return -ENOPROTOOPT;
+ 	}
+@@ -1490,6 +1513,9 @@ struct sock *sk_clone_lock(const struct sock *sk, const gfp_t priority)
+ 
+ 		sock_copy(newsk, sk);
+ 
++		/* A clone is a new socket, so it gets its own cookie. */
++		atomic64_set(&newsk->sk_cookie, 0);
++
+ 		newsk->sk_prot_creator = sk->sk_prot;
+ 
+ 		/* SANITY */
+diff --git a/kernel-3.18/net/core/sysctl_net_core.c b/kernel-3.18/net/core/sysctl_net_core.c
+index cd386d2fd..fc7c7fff6 100644
+--- a/kernel-3.18/net/core/sysctl_net_core.c
++++ b/kernel-3.18/net/core/sysctl_net_core.c
+@@ -18,6 +18,7 @@
+ 
+ #include <net/ip.h>
+ #include <net/sock.h>
++#include <linux/bpf-cgroup.h>
+ #include <net/net_ratelimit.h>
+ #include <net/busy_poll.h>
+ #include <net/pkt_sched.h>
+@@ -274,6 +275,29 @@ static struct ctl_table net_core_table[] = {
+ 		.mode		= 0644,
+ 		.proc_handler	= proc_dointvec
+ 	},
++#endif
++#ifdef CONFIG_BPF_SYSCALL
++	{
++		.procname	= "bpf_cgroup_mode",
++		.data		= &sysctl_bpf_cgroup_mode,
++		.maxlen		= sizeof(int),
++		.mode		= 0644,
++		.proc_handler	= proc_dointvec
++	},
++	{
++		.procname	= "bpf_cgroup_runs",
++		.data		= &sysctl_bpf_cgroup_runs,
++		.maxlen		= sizeof(sysctl_bpf_cgroup_runs),
++		.mode		= 0444,
++		.proc_handler	= proc_dointvec
++	},
++	{
++		.procname	= "bpf_cgroup_drops",
++		.data		= &sysctl_bpf_cgroup_drops,
++		.maxlen		= sizeof(sysctl_bpf_cgroup_drops),
++		.mode		= 0444,
++		.proc_handler	= proc_dointvec
++	},
+ #endif
+ 	{
+ 		.procname	= "netdev_tstamp_prequeue",
+diff --git a/kernel-3.18/net/ipv4/ip_output.c b/kernel-3.18/net/ipv4/ip_output.c
+index 77477b1c9..0ed487803 100644
+--- a/kernel-3.18/net/ipv4/ip_output.c
++++ b/kernel-3.18/net/ipv4/ip_output.c
+@@ -64,6 +64,7 @@
+ 
+ #include <net/snmp.h>
+ #include <net/ip.h>
++#include <linux/bpf-cgroup.h>
+ #include <net/protocol.h>
+ #include <net/route.h>
+ #include <net/xfrm.h>
+@@ -255,6 +256,13 @@ static int ip_finish_output_gso(struct sk_buff *skb)
+ 
+ static int ip_finish_output(struct sk_buff *skb)
+ {
++	int err = bpf_cgroup_run_egress(skb);
++
++	if (err) {
++		kfree_skb(skb);
++		return err;
++	}
++
+ #if defined(CONFIG_NETFILTER) && defined(CONFIG_XFRM)
+ 	/* Policy lookup after SNAT yielded a new policy */
+ 	if (skb_dst(skb)->xfrm != NULL) {
+diff --git a/kernel-3.18/net/ipv6/ip6_output.c b/kernel-3.18/net/ipv6/ip6_output.c
+index 6ff565a9d..2fdfaf7bd 100644
+--- a/kernel-3.18/net/ipv6/ip6_output.c
++++ b/kernel-3.18/net/ipv6/ip6_output.c
+@@ -46,6 +46,7 @@
+ #include <net/snmp.h>
+ 
+ #include <net/ipv6.h>
++#include <linux/bpf-cgroup.h>
+ #include <net/ndisc.h>
+ #include <net/protocol.h>
+ #include <net/ip6_route.h>
+@@ -124,6 +125,13 @@ static int ip6_finish_output2(struct sk_buff *skb)
+ 
+ static int ip6_finish_output(struct sk_buff *skb)
+ {
++	int err = bpf_cgroup_run_egress(skb);
++
++	if (err) {
++		kfree_skb(skb);
++		return err;
++	}
++
+ 	if ((skb->len > ip6_skb_dst_mtu(skb) && !skb_is_gso(skb)) ||
+ 	    dst_allfrag(skb_dst(skb)) ||
+ 	    (IP6CB(skb)->frag_max_size && skb->len > IP6CB(skb)->frag_max_size))
+diff --git a/kernel-3.18/net/netfilter/xt_bpf.c b/kernel-3.18/net/netfilter/xt_bpf.c
+index dffee9d47..a9ed7a621 100644
+--- a/kernel-3.18/net/netfilter/xt_bpf.c
++++ b/kernel-3.18/net/netfilter/xt_bpf.c
+@@ -10,6 +10,8 @@
+ #include <linux/module.h>
+ #include <linux/skbuff.h>
+ #include <linux/filter.h>
++#include <linux/bpf.h>
++#include <linux/bpf-cgroup.h>
+ 
+ #include <linux/netfilter/xt_bpf.h>
+ #include <linux/netfilter/x_tables.h>
+@@ -49,25 +51,99 @@ static void bpf_mt_destroy(const struct xt_mtdtor_param *par)
+ 	bpf_prog_destroy(info->filter);
+ }
+ 
+-static struct xt_match bpf_mt_reg __read_mostly = {
+-	.name		= "bpf",
+-	.revision	= 0,
+-	.family		= NFPROTO_UNSPEC,
+-	.checkentry	= bpf_mt_check,
+-	.match		= bpf_mt,
+-	.destroy	= bpf_mt_destroy,
+-	.matchsize	= sizeof(struct xt_bpf_info),
+-	.me		= THIS_MODULE,
++/* Revision 1 follows 4.14. Classic bytecode stays usable through it, and
++ * pinned and fd programs are eBPF, so they need the __sk_buff context. */
++static int bpf_mt_check_v1(const struct xt_mtchk_param *par)
++{
++	struct xt_bpf_info_v1 *info = par->matchinfo;
++	struct sock_fprog_kern program;
++	struct bpf_prog *prog;
++
++	switch (info->mode) {
++	case XT_BPF_MODE_BYTECODE:
++		program.len = info->bpf_program_num_elem;
++		program.filter = info->bpf_program;
++		if (bpf_prog_create(&info->filter, &program)) {
++			pr_info("bpf: check failed: parse error\n");
++			return -EINVAL;
++		}
++		return 0;
++	case XT_BPF_MODE_PATH_PINNED:
++		if (strnlen(info->path, XT_BPF_PATH_MAX) == XT_BPF_PATH_MAX)
++			return -EINVAL;
++		prog = bpf_prog_get_type_path(info->path,
++					      BPF_PROG_TYPE_SOCKET_FILTER);
++		break;
++	case XT_BPF_MODE_FD_ELF:
++		prog = bpf_prog_get(info->fd);
++		if (!IS_ERR(prog) &&
++		    prog->aux->prog_type != BPF_PROG_TYPE_SOCKET_FILTER) {
++			bpf_prog_put(prog);
++			prog = ERR_PTR(-EINVAL);
++		}
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	if (IS_ERR(prog))
++		return PTR_ERR(prog);
++
++	info->filter = prog;
++	return 0;
++}
++
++static bool bpf_mt_v1(const struct sk_buff *skb, struct xt_action_param *par)
++{
++	const struct xt_bpf_info_v1 *info = par->matchinfo;
++
++	if (info->mode == XT_BPF_MODE_BYTECODE)
++		return BPF_PROG_RUN(info->filter, skb);
++
++	return bpf_skb_prog_run(info->filter, (struct sk_buff *)skb);
++}
++
++static void bpf_mt_destroy_v1(const struct xt_mtdtor_param *par)
++{
++	const struct xt_bpf_info_v1 *info = par->matchinfo;
++
++	if (info->mode == XT_BPF_MODE_BYTECODE)
++		bpf_prog_destroy(info->filter);
++	else
++		bpf_prog_put(info->filter);
++}
++
++static struct xt_match bpf_mt_reg[] __read_mostly = {
++	{
++		.name		= "bpf",
++		.revision	= 0,
++		.family		= NFPROTO_UNSPEC,
++		.checkentry	= bpf_mt_check,
++		.match		= bpf_mt,
++		.destroy	= bpf_mt_destroy,
++		.matchsize	= sizeof(struct xt_bpf_info),
++		.me		= THIS_MODULE,
++	},
++	{
++		.name		= "bpf",
++		.revision	= 1,
++		.family		= NFPROTO_UNSPEC,
++		.checkentry	= bpf_mt_check_v1,
++		.match		= bpf_mt_v1,
++		.destroy	= bpf_mt_destroy_v1,
++		.matchsize	= sizeof(struct xt_bpf_info_v1),
++		.me		= THIS_MODULE,
++	},
+ };
+ 
+ static int __init bpf_mt_init(void)
+ {
+-	return xt_register_match(&bpf_mt_reg);
++	return xt_register_matches(bpf_mt_reg, ARRAY_SIZE(bpf_mt_reg));
+ }
+ 
+ static void __exit bpf_mt_exit(void)
+ {
+-	xt_unregister_match(&bpf_mt_reg);
++	xt_unregister_matches(bpf_mt_reg, ARRAY_SIZE(bpf_mt_reg));
+ }
+ 
+ module_init(bpf_mt_init);
