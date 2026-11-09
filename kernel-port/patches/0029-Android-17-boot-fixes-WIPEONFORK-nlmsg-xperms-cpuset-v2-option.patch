@@ -1,0 +1,135 @@
+diff --git a/kernel-3.18/fs/proc/task_mmu.c b/kernel-3.18/fs/proc/task_mmu.c
+--- a/kernel-3.18/fs/proc/task_mmu.c
++++ b/kernel-3.18/fs/proc/task_mmu.c
+@@ -677,6 +677,7 @@
+ 		[ilog2(VM_HUGETLB)]	= "ht",
+ 		[ilog2(VM_NONLINEAR)]	= "nl",
+ 		[ilog2(VM_ARCH_1)]	= "ar",
++		[ilog2(VM_WIPEONFORK)]	= "wf",
+ 		[ilog2(VM_DONTDUMP)]	= "dd",
+ #ifdef CONFIG_MEM_SOFT_DIRTY
+ 		[ilog2(VM_SOFTDIRTY)]	= "sd",
+diff --git a/kernel-3.18/include/linux/mm.h b/kernel-3.18/include/linux/mm.h
+--- a/kernel-3.18/include/linux/mm.h
++++ b/kernel-3.18/include/linux/mm.h
+@@ -155,6 +155,7 @@
+ #define VM_HUGETLB	0x00400000	/* Huge TLB Page VM */
+ #define VM_NONLINEAR	0x00800000	/* Is non-linear (remap_file_pages) */
+ #define VM_ARCH_1	0x01000000	/* Architecture-specific flag */
++#define VM_WIPEONFORK	0x02000000	/* Wipe VMA contents in child. */
+ #define VM_DONTDUMP	0x04000000	/* Do not include in the core dump */
+ 
+ #ifdef CONFIG_MEM_SOFT_DIRTY
+diff --git a/kernel-3.18/include/uapi/asm-generic/mman-common.h b/kernel-3.18/include/uapi/asm-generic/mman-common.h
+--- a/kernel-3.18/include/uapi/asm-generic/mman-common.h
++++ b/kernel-3.18/include/uapi/asm-generic/mman-common.h
+@@ -52,6 +52,9 @@
+ 					   overrides the coredump filter bits */
+ #define MADV_DODUMP	17		/* Clear the MADV_DONTDUMP flag */
+ 
++#define MADV_WIPEONFORK 18		/* Zero memory on fork, child only */
++#define MADV_KEEPONFORK 19		/* Undo MADV_WIPEONFORK */
++
+ /* compatibility flags */
+ #define MAP_FILE	0
+ 
+diff --git a/kernel-3.18/kernel/cgroup.c b/kernel-3.18/kernel/cgroup.c
+--- a/kernel-3.18/kernel/cgroup.c
++++ b/kernel-3.18/kernel/cgroup.c
+@@ -1345,6 +1345,8 @@
+ 			opts->cpuset_clone_children = true;
+ 			continue;
+ 		}
++		if (!strcmp(token, "cpuset_v2_mode"))
++			continue;
+ 		if (!strcmp(token, "xattr")) {
+ 			opts->flags |= CGRP_ROOT_XATTR;
+ 			continue;
+diff --git a/kernel-3.18/kernel/fork.c b/kernel-3.18/kernel/fork.c
+--- a/kernel-3.18/kernel/fork.c
++++ b/kernel-3.18/kernel/fork.c
+@@ -493,7 +493,12 @@
+ 		if (retval)
+ 			goto fail_nomem_policy;
+ 		tmp->vm_mm = mm;
+-		if (anon_vma_fork(tmp, mpnt))
++		if (tmp->vm_flags & VM_WIPEONFORK) {
++			/* VM_WIPEONFORK gets a clean slate in the child. */
++			tmp->anon_vma = NULL;
++			if (anon_vma_prepare(tmp))
++				goto fail_nomem_anon_vma_fork;
++		} else if (anon_vma_fork(tmp, mpnt))
+ 			goto fail_nomem_anon_vma_fork;
+ 		tmp->vm_flags &= ~VM_LOCKED;
+ 		tmp->vm_next = tmp->vm_prev = NULL;
+@@ -541,7 +546,8 @@
+ 		rb_parent = &tmp->vm_rb;
+ 
+ 		mm->map_count++;
+-		retval = copy_page_range(mm, oldmm, mpnt);
++		if (!(tmp->vm_flags & VM_WIPEONFORK))
++			retval = copy_page_range(mm, oldmm, mpnt);
+ 
+ 		if (tmp->vm_ops && tmp->vm_ops->open)
+ 			tmp->vm_ops->open(tmp);
+diff --git a/kernel-3.18/mm/madvise.c b/kernel-3.18/mm/madvise.c
+--- a/kernel-3.18/mm/madvise.c
++++ b/kernel-3.18/mm/madvise.c
+@@ -71,6 +71,17 @@
+ 		}
+ 		new_flags &= ~VM_DONTCOPY;
+ 		break;
++	case MADV_WIPEONFORK:
++		/* MADV_WIPEONFORK is only supported on anonymous memory. */
++		if (vma->vm_file || vma->vm_flags & VM_SHARED) {
++			error = -EINVAL;
++			goto out;
++		}
++		new_flags |= VM_WIPEONFORK;
++		break;
++	case MADV_KEEPONFORK:
++		new_flags &= ~VM_WIPEONFORK;
++		break;
+ 	case MADV_DONTDUMP:
+ 		new_flags |= VM_DONTDUMP;
+ 		break;
+@@ -395,6 +406,8 @@
+ 	switch (behavior) {
+ 	case MADV_DOFORK:
+ 	case MADV_DONTFORK:
++	case MADV_WIPEONFORK:
++	case MADV_KEEPONFORK:
+ 	case MADV_NORMAL:
+ 	case MADV_SEQUENTIAL:
+ 	case MADV_RANDOM:
+diff --git a/kernel-3.18/security/selinux/ss/avtab.c b/kernel-3.18/security/selinux/ss/avtab.c
+--- a/kernel-3.18/security/selinux/ss/avtab.c
++++ b/kernel-3.18/security/selinux/ss/avtab.c
+@@ -516,6 +516,7 @@
+ 		if (avtab_android_m_compat ||
+ 			    ((xperms.specified != AVTAB_XPERMS_IOCTLFUNCTION) &&
+ 			    (xperms.specified != AVTAB_XPERMS_IOCTLDRIVER) &&
++			    (xperms.specified != AVTAB_XPERMS_NLMSG) &&
+ 			    (vers == POLICYDB_VERSION_XPERMS_IOCTL))) {
+ 			xperms.driver = xperms.specified;
+ 			if (android_m_compat_optype)
+@@ -537,6 +538,8 @@
+ 		}
+ 		for (i = 0; i < ARRAY_SIZE(xperms.perms.p); i++)
+ 			xperms.perms.p[i] = le32_to_cpu(buf32[i]);
++		if (xperms.specified == AVTAB_XPERMS_NLMSG)
++			return 0;
+ 		datum.u.xperms = &xperms;
+ 	} else {
+ 		rc = next_entry(buf32, fp, sizeof(u32));
+diff --git a/kernel-3.18/security/selinux/ss/avtab.h b/kernel-3.18/security/selinux/ss/avtab.h
+--- a/kernel-3.18/security/selinux/ss/avtab.h
++++ b/kernel-3.18/security/selinux/ss/avtab.h
+@@ -57,6 +57,7 @@
+ /* These are not flags. All 256 values may be used */
+ #define AVTAB_XPERMS_IOCTLFUNCTION	0x01
+ #define AVTAB_XPERMS_IOCTLDRIVER	0x02
++#define AVTAB_XPERMS_NLMSG		0x03
+ 	/* extension of the avtab_key specified */
+ 	u8 specified; /* ioctl, netfilter, ... */
+ 	/*
