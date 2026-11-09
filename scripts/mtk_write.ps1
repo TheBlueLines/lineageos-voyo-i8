@@ -1,7 +1,7 @@
 # Catch the preloader over the serial port and run an mtkclient command.
 # Usage: mtk_write.ps1 <seconds> <mtk.py args...>
 param([int]$Seconds = 170, [Parameter(ValueFromRemainingArguments = $true)][string[]]$MtkArgs)
-$t = "C:\Users\David\Voyo i8\TWRP"
+$t = "F:\Voyo i8\TWRP"
 $py = "$t\tools\venv-mtk\Scripts\python.exe"
 Set-Location "$t\tools\mtkclient"
 $a = @("mtk.py") + ($MtkArgs | ForEach-Object { if ($_ -match ' ') { "`"$_`"" } else { $_ } }) + @("--serialport")

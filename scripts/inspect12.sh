@@ -1,5 +1,5 @@
 #!/bin/bash
-A='/mnt/c/Users/David/Voyo i8/LineageOS'
+A='/mnt/f/Voyo i8/LineageOS'
 cd ~/los-kernel
 python3 - "$A/analysis/Image" m95/out/arch/arm64/boot/Image <<'PY'
 import struct, sys

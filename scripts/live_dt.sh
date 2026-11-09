@@ -1,4 +1,4 @@
-A='/mnt/c/Users/David/Voyo i8/LineageOS'
+A='/mnt/f/Voyo i8/LineageOS'
 rm -rf /tmp/dt; mkdir -p /tmp/dt; tar -xf "$A/device-info/devicetree.tar" -C /tmp/dt 2>/dev/null
 dtc -I fs -O dts -o "$A/analysis/live.dts" /tmp/dt 2>/dev/null; wc -l "$A/analysis/live.dts"
 cd "$A/analysis"

@@ -11,4 +11,4 @@ for i in $(seq 1 40); do
   for k in "$d/Kbuild" "${d/uapi\//}/Kbuild"; do [ -f "$k" ] && sed -i "/[[:space:]]$h\$/d" "$k"; done
 done
 git add -A; git -c user.name=voyo-port -c user.email=port@localhost commit -q -m "uapi: Drop Kbuild entries for missing headers" || true
-bash '/mnt/c/Users/David/Voyo i8/LineageOS/scripts/sync_kernel_src.sh'
+bash '/mnt/f/Voyo i8/LineageOS/scripts/sync_kernel_src.sh'

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Package the port kernel with the TWRP ramdisk for a boot test in `recovery`.
 set -euo pipefail
-A='/mnt/c/Users/David/Voyo i8/LineageOS'
+A='/mnt/f/Voyo i8/LineageOS'
 K=${KERNEL:-$HOME/los-kernel/gemini8/kernel-3.18/out/arch/arm64/boot/Image.gz}
 P=~/twrp/out/target/product/x970_t10_97inc
 MKBOOTIMG=~/twrp/out/host/linux-x86/bin/mkbootimg

@@ -52,4 +52,4 @@ P
 grep -n "hasNougatAbi()" StreamIn.cpp StreamOut.cpp | head -3
 cd ~/los/hardware/interfaces
 git commit -qam "audio: support a legacy HAL built with the Oreo audio.h" && git log --oneline -2
-git format-patch -2 -o "/mnt/c/Users/David/Voyo i8/LineageOS/patches/hardware_interfaces" >/dev/null && ls "/mnt/c/Users/David/Voyo i8/LineageOS/patches/hardware_interfaces"
+git format-patch -2 -o "/mnt/f/Voyo i8/LineageOS/patches/hardware_interfaces" >/dev/null && ls "/mnt/f/Voyo i8/LineageOS/patches/hardware_interfaces"

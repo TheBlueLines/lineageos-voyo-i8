@@ -1,4 +1,4 @@
-D='/mnt/c/Users/David/Voyo i8/LineageOS/scripts/disasm.sh'
+D='/mnt/f/Voyo i8/LineageOS/scripts/disasm.sh'
 bash "$D" ffffffc0008c7c90 ffffffc0008c8ca0 > /tmp/tp.dis 2>/dev/null
 wc -l /tmp/tp.dis
 grep -n 'bl.*8c4c18\|bl.*8c6020\|bl.*8c3f98\|bl.*8c40dc' /tmp/tp.dis | head

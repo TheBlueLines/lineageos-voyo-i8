@@ -1,6 +1,6 @@
 #!/bin/bash
 # Summarise the stock init setup that the device tree has to reproduce.
-T='/mnt/c/Users/David/Voyo i8/TWRP'
+T='/mnt/f/Voyo i8/TWRP'
 R=$HOME/stockfs/ramdisk
 mkdir -p "$R"
 [ -f "$R/init.rc" ] || (cd "$R" && zcat "$T/stock-unpacked/boot/ramdisk" | cpio -id --no-absolute-filenames 2>/dev/null)

@@ -6,7 +6,7 @@
 # recovered by disassembly). Power sequences are the stock kernel's PowerOnList
 # entries. Idempotent.
 set -e
-A='/mnt/c/Users/David/Voyo i8/LineageOS'
+A='/mnt/f/Voyo i8/LineageOS'
 K=$HOME/los-kernel/gemini8/kernel-3.18
 I=$K/drivers/misc/mediatek/imgsensor
 SRC=$I/src/mt6797

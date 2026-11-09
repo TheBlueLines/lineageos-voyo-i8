@@ -2,12 +2,12 @@
 # flash_los.ps1 [partitions], default boot system vendor. Run with the tablet
 # in Android, TWRP or fastboot.
 param([string[]]$Parts = @("boot", "system", "vendor"))
-$fb = "/mnt/c/Users/David/Voyo i8/LineageOS/scripts/fb.sh"
+$fb = "/mnt/f/Voyo i8/LineageOS/scripts/fb.sh"
 $img = "/home/builder/los/out/target/product/x970_t10_97inc"
 
 $mode = (adb devices | Select-Object -Skip 1 | Out-String).Trim()
 if ($mode) { adb reboot bootloader }
-& "C:\Users\David\Voyo i8\LineageOS\scripts\attach_fastboot.ps1"
+& "F:\Voyo i8\LineageOS\scripts\attach_fastboot.ps1"
 foreach ($p in $Parts) {
     $env:WSLENV = "FB_TIMEOUT"
     $env:FB_TIMEOUT = "400"

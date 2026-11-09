@@ -1,8 +1,8 @@
 # Flash out/test-recovery.img, boot it, wait for the fallback boot of the
 # diagnostic stock image, and save what it kept. Usage: test_cycle.ps1 <run-id>
 param([string]$Run = "x")
-$root = "C:\Users\David\Voyo i8\LineageOS"
-$wslRoot = "/mnt/c/Users/David/Voyo i8/LineageOS"
+$root = "F:\Voyo i8\LineageOS"
+$wslRoot = "/mnt/f/Voyo i8/LineageOS"
 $fb = "$wslRoot/scripts/fb.sh"
 
 adb reboot bootloader

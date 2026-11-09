@@ -1,6 +1,6 @@
 #!/bin/bash
 # Dry-run every m95 commit against the Gemini tree. Changes nothing in the tree.
-A='/mnt/c/Users/David/Voyo i8/LineageOS'
+A='/mnt/f/Voyo i8/LineageOS'
 cd ~/los-kernel/m95
 git rev-parse --is-shallow-repository | grep -q true && git fetch -q --unshallow origin lineage-20.0
 BASE=$(git rev-list --max-parents=0 origin/lineage-20.0 | tail -1)

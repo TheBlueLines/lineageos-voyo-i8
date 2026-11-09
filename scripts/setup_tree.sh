@@ -1,7 +1,7 @@
 #!/bin/bash
 # Install the device tree and kernel into ~/los and generate the vendor tree.
 set -e
-A='/mnt/c/Users/David/Voyo i8/LineageOS'
+A='/mnt/f/Voyo i8/LineageOS'
 L=$HOME/los
 D=$L/device/voyo/x970_t10_97inc
 mkdir -p "$D"

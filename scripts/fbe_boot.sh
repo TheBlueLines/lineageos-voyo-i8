@@ -7,7 +7,7 @@
 # $P/vendor/etc/fstab.mt6797, which must also reach the tablet's /vendor.
 set -e
 L=$HOME/los
-A='/mnt/c/Users/David/Voyo i8/LineageOS'
+A='/mnt/f/Voyo i8/LineageOS'
 D=$L/device/voyo/x970_t10_97inc
 P=$L/out/target/product/x970_t10_97inc
 H=$L/out/host/linux-x86/bin

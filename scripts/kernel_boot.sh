@@ -3,7 +3,7 @@
 # every header value of a reference boot.img (default: the Soong out boot.img,
 # which is what the tablet runs). Usage: kernel_boot.sh <out.img> [ref.img]
 set -e
-A='/mnt/c/Users/David/Voyo i8/LineageOS'
+A='/mnt/f/Voyo i8/LineageOS'
 P=$HOME/los24/out/target/product/x970_t10_97inc
 H=$HOME/los24/system/tools/mkbootimg
 K=$HOME/los-kernel/gemini8/kernel-3.18/out/arch/arm64/boot/Image.gz

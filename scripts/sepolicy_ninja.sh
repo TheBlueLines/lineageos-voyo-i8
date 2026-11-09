@@ -4,7 +4,7 @@
 # last full build. Syncs the device sepolicy dir first.
 set -e
 L=$HOME/los
-A='/mnt/c/Users/David/Voyo i8/LineageOS/device/voyo/x970_t10_97inc'
+A='/mnt/f/Voyo i8/LineageOS/device/voyo/x970_t10_97inc'
 rsync -a --delete "$A/sepolicy/" "$L/device/voyo/x970_t10_97inc/sepolicy/"
 cd "$L"
 P=out/target/product/x970_t10_97inc

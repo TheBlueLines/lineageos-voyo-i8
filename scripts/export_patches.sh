@@ -1,6 +1,6 @@
 #!/bin/bash
 # Save the kernel port outside the WSL distro.
-A='/mnt/c/Users/David/Voyo i8/LineageOS'
+A='/mnt/f/Voyo i8/LineageOS'
 cd ~/los-kernel/gemini8
 B=$(git rev-list --max-parents=0 HEAD | tail -1)
 rm -rf "$A/kernel-port/patches"; mkdir -p "$A/kernel-port/patches"

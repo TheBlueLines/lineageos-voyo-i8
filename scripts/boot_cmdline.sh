@@ -5,7 +5,7 @@ set -e
 L=$HOME/los
 P=$L/out/target/product/x970_t10_97inc
 B=$L/device/voyo/x970_t10_97inc/BoardConfig.mk
-rsync -a '/mnt/c/Users/David/Voyo i8/LineageOS/device/voyo/x970_t10_97inc/BoardConfig.mk' "$B"
+rsync -a '/mnt/f/Voyo i8/LineageOS/device/voyo/x970_t10_97inc/BoardConfig.mk' "$B"
 sed -i 's/\r$//' "$B"
 CMD=$(grep -E '^BOARD_KERNEL_CMDLINE \+?:?=' "$B" | sed -E 's/^BOARD_KERNEL_CMDLINE \+?:?= *//' | tr '\n' ' ' | sed 's/ *$//')
 # The build system appends buildvariant=<variant>.

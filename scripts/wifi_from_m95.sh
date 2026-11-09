@@ -32,7 +32,7 @@ sed -i 'N;s/u2RxIELen,\n\s*eStatus == WLAN_STATUS_MEDIA_DISCONNECT_LOCALLY, GFP_
 grep -n "LOCALLY, GFP_KERNEL" $L/gl_kal.c $L/gl_p2p_kal.c && { echo "cfg80211 patch failed"; exit 1; }
 git status --short | head
 # no FM driver in the Gemini tree (also out-of-tree in O); FM isn't needed
-for f in arch/arm64/configs/x970_t10_97inc_defconfig "/mnt/c/Users/David/Voyo i8/LineageOS/kernel-port/x970_t10_97inc_defconfig"; do
+for f in arch/arm64/configs/x970_t10_97inc_defconfig "/mnt/f/Voyo i8/LineageOS/kernel-port/x970_t10_97inc_defconfig"; do
   sed -i 's/^CONFIG_MTK_FMRADIO=y/# CONFIG_MTK_FMRADIO is not set/' "$f"
 done
 # the stock O vendor keeps WMT_SOC.cfg in /vendor/firmware (as the stock kernel expects)

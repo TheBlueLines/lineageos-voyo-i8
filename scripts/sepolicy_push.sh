@@ -4,10 +4,10 @@
 # Usage: sepolicy_push.sh [path/to/init.mt6797.rc]
 set -e
 export MSYS_NO_PATHCONV=1
-cd '/c/Users/David/Voyo i8/LineageOS'
+cd '/f/Voyo i8/LineageOS'
 N=out/selinux/new
 rm -rf "$N"; mkdir -p "$N"
-wsl -d TWRP-Builder -- bash -c 'cp ~/los/out/target/product/x970_t10_97inc/vendor/etc/selinux/* "/mnt/c/Users/David/Voyo i8/LineageOS/out/selinux/new/"'
+wsl -d TWRP-Builder -- bash -c 'cp ~/los/out/target/product/x970_t10_97inc/vendor/etc/selinux/* "/mnt/f/Voyo i8/LineageOS/out/selinux/new/"'
 if [ "$(adb get-state)" = recovery ]; then
   adb shell 'mount /vendor 2>/dev/null; true'
 else

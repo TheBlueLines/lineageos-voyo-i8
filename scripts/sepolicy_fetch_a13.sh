@@ -3,7 +3,7 @@
 # tools/port_stock_sepolicy.py.
 set -e
 P=$HOME/los/out/target/product/x970_t10_97inc
-D='/mnt/c/Users/David/Voyo i8/LineageOS/out/selinux/a13'
+D='/mnt/f/Voyo i8/LineageOS/out/selinux/a13'
 mkdir -p "$D"
 cp $P/system/etc/selinux/plat_sepolicy.cil $P/system/etc/selinux/plat_file_contexts \
    $P/system/etc/selinux/plat_property_contexts $P/system/etc/selinux/plat_hwservice_contexts \

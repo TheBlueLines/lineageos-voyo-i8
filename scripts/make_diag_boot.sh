@@ -1,8 +1,8 @@
 #!/bin/bash
 # Stock boot image with the log-collecting init rule. Stock kernel, stock ramdisk otherwise.
 set -euo pipefail
-A='/mnt/c/Users/David/Voyo i8/LineageOS'
-T='/mnt/c/Users/David/Voyo i8/TWRP'
+A='/mnt/f/Voyo i8/LineageOS'
+T='/mnt/f/Voyo i8/TWRP'
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 python3 -I "$A/scripts/patch_boot_diag.py" "$T/stock-unpacked/boot/ramdisk" "$W/ramdisk.gz"
 ~/twrp/out/host/linux-x86/bin/mkbootimg --kernel "$T/stock-unpacked/boot/kernel" --ramdisk "$W/ramdisk.gz" \

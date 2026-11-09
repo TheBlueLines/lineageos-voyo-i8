@@ -1,7 +1,7 @@
 #!/bin/bash
 # Add the Android 13 kernel features to the Gemini-based tree. Safe to rerun.
 set -e
-A='/mnt/c/Users/David/Voyo i8/LineageOS'
+A='/mnt/f/Voyo i8/LineageOS'
 P=~/los-kernel/m95-patches
 cd ~/los-kernel/gemini8/kernel-3.18
 

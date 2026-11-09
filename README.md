@@ -95,7 +95,7 @@ Recovery and Vol Down to confirm.
 - `analysis`: the board device tree (`dtb0.dtb`, appended to the kernel) and live device-tree dumps.
 - `scripts`: build, flash and debugging helpers. They expect the WSL distro `TWRP-Builder` with
   the LineageOS tree in `~/los` and the kernel in `~/los-kernel/gemini8`, and this checkout at
-  `C:\Users\David\Voyo i8\LineageOS`. Many `inspect*.sh` scripts are one-off bring-up probes.
+  `F:\Voyo i8\LineageOS`. Many `inspect*.sh` scripts are one-off bring-up probes.
 
 ### Building
 

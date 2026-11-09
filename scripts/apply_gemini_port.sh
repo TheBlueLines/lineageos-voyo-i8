@@ -2,7 +2,7 @@
 # Apply the Voyo i8 drivers and the stock kernel config to the Android 8 era
 # MT6797X kernel of the Gemini PDA. Safe to rerun.
 set -e
-A='/mnt/c/Users/David/Voyo i8/LineageOS'
+A='/mnt/f/Voyo i8/LineageOS'
 cd ~/los-kernel/gemini8/kernel-3.18
 git rev-parse --verify voyo-i8 >/dev/null 2>&1 || git checkout -q -b voyo-i8
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-A='/mnt/c/Users/David/Voyo i8/LineageOS'
+A='/mnt/f/Voyo i8/LineageOS'
 cd ~/los-kernel/m95
 echo "== image headers (code0 code1 text_offset image_size)"
 xxd -l 32 "$A/analysis/Image"

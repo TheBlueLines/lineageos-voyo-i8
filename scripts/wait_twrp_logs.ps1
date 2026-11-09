@@ -1,6 +1,6 @@
 # Wait for TWRP, then pull the logs of the boot before it. Usage: wait_twrp_logs.ps1 <run-id>
 param([string]$Run = "x", [int]$Minutes = 115)
-$r = "C:\Users\David\Voyo i8\LineageOS\device-info"
+$r = "F:\Voyo i8\LineageOS\device-info"
 $deadline = (Get-Date).AddMinutes($Minutes)
 do {
     Start-Sleep -Seconds 3

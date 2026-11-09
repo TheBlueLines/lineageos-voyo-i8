@@ -1,8 +1,8 @@
 # Flash images, boot LineageOS, and collect what happened.
 # Usage: los_cycle.ps1 <run-id> [partitions]. Tablet in TWRP, Android or fastboot.
 param([string]$Run = "x", [string[]]$Parts = @("boot"), [int]$Wait = 300)
-$root = "C:\Users\David\Voyo i8\LineageOS"
-$fb = "/mnt/c/Users/David/Voyo i8/LineageOS/scripts/fb.sh"
+$root = "F:\Voyo i8\LineageOS"
+$fb = "/mnt/f/Voyo i8/LineageOS/scripts/fb.sh"
 
 & "$root\scripts\flash_los.ps1" $Parts 2>&1 | Select-Object -Last 6
 adb shell reboot

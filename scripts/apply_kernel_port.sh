@@ -1,7 +1,7 @@
 #!/bin/bash
 # Apply the Voyo i8 port onto the Meizu MX6 kernel. Safe to rerun.
 set -e
-A='/mnt/c/Users/David/Voyo i8/LineageOS'
+A='/mnt/f/Voyo i8/LineageOS'
 cd ~/los-kernel/m95
 git rev-parse --verify voyo-i8 >/dev/null 2>&1 || git checkout -q -b voyo-i8
 

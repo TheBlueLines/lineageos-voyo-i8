@@ -5,4 +5,4 @@ function Port { Get-CimInstance Win32_PnPEntity | Where-Object { $_.DeviceID -ma
 while ((Port) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
 if (Port) { "no reset seen"; return }
 "reset seen at $(Get-Date)"
-& "C:\Users\David\Voyo i8\LineageOS\scripts\mtk_write.ps1" 900 w boot "C:\Users\David\Voyo i8\TWRP\out\twrp-3.7.0_9-voyo_i8-x970_t10_97inc.img"
+& "F:\Voyo i8\LineageOS\scripts\mtk_write.ps1" 900 w boot "F:\Voyo i8\TWRP\out\twrp-3.7.0_9-voyo_i8-x970_t10_97inc.img"

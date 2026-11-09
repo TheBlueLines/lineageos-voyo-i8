@@ -1,5 +1,5 @@
 #!/bin/bash
-A='/mnt/c/Users/David/Voyo i8/LineageOS'
+A='/mnt/f/Voyo i8/LineageOS'
 cd /tmp; rm -rf ksplit; mkdir ksplit
 zcat ~/los-kernel/gemini8/kernel-3.18/out/arch/arm64/boot/Image.gz > ksplit/gemini.Image
 V=~/los/out/target/product/x970_t10_97inc/vendor

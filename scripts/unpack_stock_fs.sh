@@ -1,6 +1,6 @@
 #!/bin/bash
 # Unpack the stock system and vendor images, then report what the vendor blobs need.
-A='/mnt/c/Users/David/Voyo i8/LineageOS'
+A='/mnt/f/Voyo i8/LineageOS'
 S=$HOME/stockfs
 mkdir -p "$S/vendor" "$S/system"
 [ -d "$S/vendor/bin" ] || /usr/sbin/debugfs -R "rdump / $S/vendor" "$A/stock-backup/vendor.bin" 2>/dev/null

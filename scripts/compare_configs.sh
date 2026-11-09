@@ -1,6 +1,6 @@
 #!/bin/bash
 W=$HOME/los-kernel; cd "$W"
-zcat "/mnt/c/Users/David/Voyo i8/LineageOS/device-info/config.gz" | grep -E '^(CONFIG_[A-Z0-9_]+=|# CONFIG)' > stock.cfg
+zcat "/mnt/f/Voyo i8/LineageOS/device-info/config.gz" | grep -E '^(CONFIG_[A-Z0-9_]+=|# CONFIG)' > stock.cfg
 echo "stock opts: $(grep -c '^CONFIG' stock.cfg)"
 ls gemini8/arch/arm64/configs/ | grep -iE 'gemini|aeon|x970|6797|k97|E-?[0-9]' | head; ls m95/arch/arm64/configs | grep -iE 'm95|mx6|6797' 
 G=$(ls gemini8/arch/arm64/configs/*defconfig | grep -iE 'gemini|aeon6797' | head -1); echo "gemini cfg: $G"

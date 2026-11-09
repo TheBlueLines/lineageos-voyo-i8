@@ -2,7 +2,7 @@
 # Bring-up kernel: mark the RTC recovery flag at boot, so that a panic, a
 # watchdog reset or any reboot lands in TWRP instead of looping.
 set -e
-A='/mnt/c/Users/David/Voyo i8/LineageOS'
+A='/mnt/f/Voyo i8/LineageOS'
 cd ~/los-kernel/gemini8/kernel-3.18
 F=drivers/misc/mediatek/rtc/voyo_failsafe.c
 if [ ! -f "$F" ]; then

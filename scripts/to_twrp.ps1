@@ -1,7 +1,7 @@
 # Put the known-good TWRP back in `recovery` and boot it.
-$wslRoot = "/mnt/c/Users/David/Voyo i8/LineageOS"
+$wslRoot = "/mnt/f/Voyo i8/LineageOS"
 $fb = "$wslRoot/scripts/fb.sh"
-$twrp = "/mnt/c/Users/David/Voyo i8/TWRP/out/twrp-3.7.0_9-voyo_i8-x970_t10_97inc.img"
+$twrp = "/mnt/f/Voyo i8/TWRP/out/twrp-3.7.0_9-voyo_i8-x970_t10_97inc.img"
 
 adb reboot bootloader
 foreach ($i in 1..20) {
