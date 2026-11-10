@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TWRP Builder <builder@localhost>
+Date: Tue, 10 Nov 2026 16:00:00 +0100
+Subject: [PATCH] battery: expose voltage_now and temp for Android
+
+The driver only had MTK's batt_vol and batt_temp names, which the stock
+health service was built to read. Android 13's reads the standard names,
+so it saw 0 V and 0 C. Report the same values under both. no_thermal keeps
+the thermal zone list unchanged.
+---
+diff --git a/kernel-3.18/drivers/power/mediatek/battery_common.c b/kernel-3.18/drivers/power/mediatek/battery_common.c
+index c7b283ce4..ee86d4653 100644
+--- a/kernel-3.18/drivers/power/mediatek/battery_common.c
++++ b/kernel-3.18/drivers/power/mediatek/battery_common.c
+@@ -340,6 +340,9 @@ static enum power_supply_property battery_props[] = {
+ 	POWER_SUPPLY_PROP_VOLTAGE_MAX,
+ 	POWER_SUPPLY_PROP_CHARGE_COUNTER,
+ 	/* Add for Battery Service */
++	/* The names the Android health service reads. */
++	POWER_SUPPLY_PROP_VOLTAGE_NOW,
++	POWER_SUPPLY_PROP_TEMP,
+ 	POWER_SUPPLY_PROP_batt_vol,
+ 	POWER_SUPPLY_PROP_batt_temp,
+ 	/* Add for EM */
+@@ -660,9 +663,11 @@ static int battery_get_property(struct power_supply *psy,
+ 	case POWER_SUPPLY_PROP_CAPACITY:
+ 		val->intval = data->BAT_CAPACITY;
+ 		break;
++	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
+ 	case POWER_SUPPLY_PROP_batt_vol:
+ 		val->intval = data->BAT_batt_vol * 1000;
+ 		break;
++	case POWER_SUPPLY_PROP_TEMP:
+ 	case POWER_SUPPLY_PROP_batt_temp:
+ 		val->intval = data->BAT_batt_temp;
+ 		break;
+@@ -762,6 +767,8 @@ static struct usb_data usb_main = {
+ static struct battery_data battery_main = {
+ 	.psy = {
+ 		.name = "battery",
++		/* The temp property would add a zone beside mtktsbattery. */
++		.no_thermal = true,
+ 		.type = POWER_SUPPLY_TYPE_BATTERY,
+ 		.properties = battery_props,
+ 		.num_properties = ARRAY_SIZE(battery_props),
