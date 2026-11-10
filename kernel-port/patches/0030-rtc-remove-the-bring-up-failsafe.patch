@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TWRP Builder <builder@localhost>
+Date: Tue, 10 Nov 2026 12:03:45 +0100
+Subject: [PATCH] rtc: remove the bring-up failsafe
+
+It marked the RTC recovery flag on every boot, so the next reboot from
+Android always landed in recovery once. Bring-up is finished.
+---
+diff --git a/kernel-3.18/drivers/misc/mediatek/rtc/Makefile b/kernel-3.18/drivers/misc/mediatek/rtc/Makefile
+index 5b18b120b..b3f664083 100644
+--- a/kernel-3.18/drivers/misc/mediatek/rtc/Makefile
++++ b/kernel-3.18/drivers/misc/mediatek/rtc/Makefile
+@@ -55,4 +55,3 @@ MTK_MDI_IP_SRC:= $(MDI_IP_FOLDER)/
+ obj-y += \
+     $(MTK_MDI_IP_SRC)
+ 
+-obj-y += voyo_failsafe.o
+diff --git a/kernel-3.18/drivers/misc/mediatek/rtc/voyo_failsafe.c b/kernel-3.18/drivers/misc/mediatek/rtc/voyo_failsafe.c
+deleted file mode 100644
+index 6d96effa1..000000000
+--- a/kernel-3.18/drivers/misc/mediatek/rtc/voyo_failsafe.c
++++ /dev/null
+@@ -1,10 +0,0 @@
+-/* Bring-up only: send every following boot to recovery. */
+-#include <linux/init.h>
+-#include <mt-plat/mtk_rtc.h>
+-
+-static int __init voyo_failsafe_init(void)
+-{
+-	rtc_mark_recovery();
+-	return 0;
+-}
+-late_initcall(voyo_failsafe_init);

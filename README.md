@@ -34,8 +34,9 @@ Tested on one tablet.
 | Sensors, USB OTG | Untested |
 | Display refresh | 48.3 Hz, the panel's stock rate |
 
-Known bring-up leftovers: `adb reboot` from Android lands in TWRP once (the `voyo_failsafe` RTC mark;
-`adb reboot` from TWRP boots Android). A diagnostic logger runs until boot completes.
+Known bring-up leftover: a diagnostic logger runs until boot completes. The `voyo_failsafe` RTC mark is
+gone since kernel #39, so a panic or boot loop no longer lands in recovery by itself;
+`scripts/failsafe_kernel.sh` adds it back for risky kernel work.
 
 ## Before you flash
 
