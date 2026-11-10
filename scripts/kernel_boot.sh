@@ -1,13 +1,13 @@
 #!/bin/bash
 # Repack a boot.img with the current gemini8 kernel, keeping the ramdisk and
-# every header value of a reference boot.img (default: the Soong out boot.img,
-# which is what the tablet runs). Usage: kernel_boot.sh <out.img> [ref.img]
+# every header value of a reference boot.img (default: the image the tablet
+# runs). Usage: kernel_boot.sh <out.img> [ref.img]
 set -e
 A='/mnt/f/Voyo i8/LineageOS'
-P=$HOME/los24/out/target/product/x970_t10_97inc
-H=$HOME/los24/system/tools/mkbootimg
+# LineageOS android_system_tools_mkbootimg, branch lineage-20.0.
+H=$HOME/mkbootimg
 K=$HOME/los-kernel/gemini8/kernel-3.18/out/arch/arm64/boot/Image.gz
-OUT=$1; REF=${2:-$P/boot.img}
+OUT=$1; REF=${2:-$A/out/bpf/boot-k39.img}
 T=$(mktemp -d)
 INFO=$(python3 $H/unpack_bootimg.py --boot_img "$REF" --out $T/old)
 OSV=$(echo "$INFO" | sed -n 's/^os version: //p')
