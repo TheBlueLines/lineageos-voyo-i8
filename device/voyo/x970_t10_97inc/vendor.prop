@@ -18,6 +18,18 @@ ro.vendor.vintf.legacy_kernel=true
 # The stock audio HAL uses the Android 8 audio.h stream layout.
 ro.vendor.audio.legacy_oreo_abi=true
 
+# Bluetooth: Android 13 starts only the profiles enabled here.
+bluetooth.profile.a2dp.source.enabled=true
+bluetooth.profile.avrcp.target.enabled=true
+bluetooth.profile.hfp.ag.enabled=true
+bluetooth.profile.hid.host.enabled=true
+bluetooth.profile.hid.device.enabled=true
+bluetooth.profile.opp.enabled=true
+bluetooth.profile.pan.nap.enabled=true
+bluetooth.profile.pan.panu.enabled=true
+bluetooth.profile.pbap.server.enabled=true
+bluetooth.profile.map.server.enabled=true
+
 # Camera: Android 13 dropped device HAL 1, so make the MTK provider offer HAL3.
 persist.mtkcam.aosp_hal_legacy=0
 persist.mtkcam.aosp_hal_version=3

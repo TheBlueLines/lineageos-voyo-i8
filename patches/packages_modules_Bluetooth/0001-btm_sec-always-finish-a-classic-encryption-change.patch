@@ -1,0 +1,39 @@
+From 9d6d385f9ac44a73aecc0456a50ced1f3ef7c4e2 Mon Sep 17 00:00:00 2001
+From: TWRP Builder <builder@localhost>
+Date: Tue, 10 Nov 2026 18:20:23 +0100
+Subject: [PATCH] btm_sec: always finish a classic encryption change
+
+On this MT6797 tablet the encrypted flag is already set when the only
+encryption change event arrives, so the early return dropped it. The L2CAP
+channel waiting in ORIG_W4_SEC_COMP was never woken, no AVDTP connect
+request went out, and the speaker hung up after 5 seconds.
+
+A later event for a link with no pending request still returns at the
+sec_state check further down.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ system/stack/btm/btm_sec.cc | 7 -------
+ 1 file changed, 7 deletions(-)
+
+diff --git a/system/stack/btm/btm_sec.cc b/system/stack/btm/btm_sec.cc
+index 2d87034..bd5501c 100644
+--- a/system/stack/btm/btm_sec.cc
++++ b/system/stack/btm/btm_sec.cc
+@@ -3458,13 +3458,6 @@ void btm_sec_encrypt_change(uint16_t handle, tHCI_STATUS status,
+   if (status == HCI_SUCCESS) {
+     if (encr_enable) {
+       if (p_dev_rec->hci_handle == handle) {  // classic
+-        if ((p_dev_rec->sec_flags & BTM_SEC_AUTHENTICATED) &&
+-            (p_dev_rec->sec_flags & BTM_SEC_ENCRYPTED)) {
+-          LOG_INFO(
+-              "Link is authenticated & encrypted, ignoring this enc change "
+-              "event");
+-          return;
+-        }
+         p_dev_rec->sec_flags |= (BTM_SEC_AUTHENTICATED | BTM_SEC_ENCRYPTED);
+         if (p_dev_rec->pin_code_length >= 16 ||
+             p_dev_rec->link_key_type == BTM_LKEY_TYPE_AUTH_COMB ||
+-- 
+2.56.0.windows.4
+

@@ -10,6 +10,9 @@ r_dir_file(hal_thermal_default, proc_mtktz)
 allow hal_audio_default sysfs_switch:dir search;
 allow hal_audio_default system_file:file r_file_perms;
 
+# Stock A2DP module: the audio control and data sockets of the Bluetooth stack.
+allow hal_audio_default bluetooth:unix_stream_socket connectto;
+
 # gralloc maps ashmem for buffer metadata. The composer loads gralloc in-process
 # for its overlay scratch buffers; without this every rotated camera preview
 # frame loses its buffer and the layer flickers.

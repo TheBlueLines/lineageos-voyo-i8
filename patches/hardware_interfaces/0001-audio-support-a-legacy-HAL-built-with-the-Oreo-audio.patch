@@ -48,7 +48,7 @@ index a807c54..5dc97c9 100644
 -// Device::hasNougatAbi(). The other modules loaded by this service are not affected.
 +// ro.vendor.audio.legacy_nougat_abi and ro.vendor.audio.legacy_oreo_abi mark the primary
 +// legacy HAL as a Nougat or Oreo build, see Device::hasNougatAbi() and
-+// Device::hasLegacyStreamAbi(). The other modules loaded by this service are not affected.
++// Device::hasLegacyStreamAbi(). The other modules are Oreo blobs too, see the Device() default.
  PrimaryDevice::PrimaryDevice(audio_hw_device_t* device)
 -    : mDevice(new Device(device, property_get_bool("ro.vendor.audio.legacy_nougat_abi", false))) {
 +    : mDevice(new Device(device, property_get_bool("ro.vendor.audio.legacy_nougat_abi", false),
@@ -286,7 +286,7 @@ index ea1ef8c..2808de8 100644
  struct Device : public IDevice, public ParametersUtil {
 -    explicit Device(audio_hw_device_t* device, bool hasNougatAbi = false);
 +    explicit Device(audio_hw_device_t* device, bool hasNougatAbi = false,
-+                    bool hasOreoAbi = false);
++                    bool hasOreoAbi = true);
  
      // Methods from ::android::hardware::audio::CPP_VERSION::IDevice follow.
      Return<Result> initCheck() override;

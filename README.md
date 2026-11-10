@@ -18,7 +18,7 @@ Tested on one tablet.
 |---|---|
 | Boot, display, touch, sleep and wake | Working; the tablet deep-sleeps with the screen off (about 96% of an 8.5-hour screen-off run with Wi-Fi connected, about 1% battery per hour; about 99% after the first hour of a 4.3-hour run with Wi-Fi connected, airplane mode on and no SIM, about 1% battery in total) |
 | Wi-Fi (2.4 and 5 GHz) | Working |
-| Bluetooth | Working |
+| Bluetooth | Working, including A2DP audio to a speaker (tested with a JBL Charge 5) |
 | Battery and charging | Working |
 | GPU | Mali-T880 GLES 3.2 with DVFS; Vulkan 1.0 |
 | SELinux | Enforcing |
@@ -91,6 +91,7 @@ Recovery and Vol Down to confirm.
   `x970_t10_97inc_defconfig` is the kernel config. `lcm/` and `touch/` are the panel and touch
   drivers, which were written from disassembly of the stock kernel.
 - `patches`: changes to LineageOS 20 projects (`hardware/interfaces` for the Android 8 audio HAL,
+  `packages/modules/Bluetooth` for classic Bluetooth encryption on this tablet,
   `external/setupcompat` for the setup wizard layout on tablets, `frameworks/av` and
   `system/libhwbinder` for camera, flash and hardware encoding on the Android 8 blobs).
 - `analysis`: the board device tree (`dtb0.dtb`, appended to the kernel) and live device-tree dumps.

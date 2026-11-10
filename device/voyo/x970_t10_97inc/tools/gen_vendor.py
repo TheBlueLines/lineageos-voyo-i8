@@ -321,6 +321,28 @@ assert data.count(old) == 4, "mnld navigation copy sites not found"
 with open(mnld, "wb") as f:
     f.write(data.replace(old, new))
 
+# 5b1c. Android 13 no longer builds an A2DP audio module for this configuration,
+# so use the stock one. Copied after the renames above: it only needs VNDK
+# libraries and libchrome, which vendor processes cannot load. It imports just
+# logging::LogMessage from libchrome, on a CHECK failure path, so those symbols
+# become weak and the DT_NEEDED entry names liblog, which it needs anyway.
+a2dp = os.path.join(PROP, "lib/hw/audio.a2dp.default.so")
+shutil.copyfile(os.path.join(SS, "lib/hw/audio.a2dp.default.so"), a2dp)
+with open(a2dp, "rb") as f:
+    data = bytearray(f.read())
+strtab, ents = elf_dyn(bytes(data))
+libs = {cstr(data, strtab + v): v for t, v in ents if t == 1}
+old, new = struct.pack("<II", 1, libs["libchrome.so"]), struct.pack("<II", 1, libs["liblog.so"])
+assert data.count(old) == 1, "A2DP libchrome entry not found"
+data[data.index(old):data.index(old) + len(old)] = new
+for sym in (b"_ZN7logging10LogMessageC1EPKciS2_", b"_ZN7logging10LogMessageD1Ev"):
+    name = data.index(sym + b"\0", strtab) - strtab
+    old = struct.pack("<IIIBBH", name, 0, 0, 0x12, 0, 0)  # undefined, global function
+    assert data.count(old) == 1, "A2DP libchrome symbol not found"
+    data[data.index(old) + 12] = 0x22  # weak function
+with open(a2dp, "wb") as f:
+    f.write(data)
+
 # 5c. camerahalserver used to segfault in its sensor search: the kernel had no
 # GC5005/GC2235 drivers and returned a 216-byte sensor info struct where the
 # stock HAL expects 160 bytes. Fixed in the kernel (scripts/camera_kernel.sh),
