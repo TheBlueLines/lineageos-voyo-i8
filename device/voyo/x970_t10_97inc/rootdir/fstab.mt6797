@@ -28,6 +28,7 @@
 /dev/block/mmcblk0p24  /logo        emmc   defaults                                               defaults
 /dev/block/mmcblk0p3   /expdb       emmc   defaults                                               defaults
 
+/devices/mtk-msdc.0/11240000.msdc1*  auto  auto  defaults  voldmanaged=sdcard1:auto
 /devices/soc/11270000.usb3_xhci*  auto  auto  defaults  voldmanaged=usbotg:auto
 
 # zram swap: 3.8 GB of RAM, lz4 not in this kernel.
