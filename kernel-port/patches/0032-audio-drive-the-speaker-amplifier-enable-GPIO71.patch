@@ -1,0 +1,85 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TWRP Builder <builder@localhost>
+Date: Wed, 11 Nov 2026 22:07:33 +0100
+Subject: [PATCH] audio: drive the speaker amplifier enable GPIO71
+
+The speaker path only pulsed hpdepop (GPIO111). The amplifier enable is
+GPIO71, named audextamp_high/low in the stock DT, and nothing drove it, so
+the built-in speaker stayed silent while headphones worked. Look up the
+audextamp states and pulse GPIO71 the same way on enable (mode 3), pull it
+low on disable.
+---
+ .../sound/soc/mediatek/mt6797/AudDrv_Gpio.c   | 31 ++++++++++++++++---
+ 1 file changed, 27 insertions(+), 4 deletions(-)
+
+diff --git a/kernel-3.18/sound/soc/mediatek/mt6797/AudDrv_Gpio.c b/kernel-3.18/sound/soc/mediatek/mt6797/AudDrv_Gpio.c
+index 94ca87d70..a49148e70 100755
+--- a/kernel-3.18/sound/soc/mediatek/mt6797/AudDrv_Gpio.c
++++ b/kernel-3.18/sound/soc/mediatek/mt6797/AudDrv_Gpio.c
+@@ -78,10 +78,11 @@ enum audio_system_gpio_type {
+ 	GPIO_SMARTPA_MODE3,
+ 	GPIO_TDM_MODE0,
+ 	GPIO_TDM_MODE1,
+-/*	GPIO_I2S_MODE0,
+-	GPIO_I2S_MODE1,
++	/* VOYO i8: the speaker amplifier enable is GPIO71 (audextamp in the DT) */
+ 	GPIO_EXTAMP_HIGH,
+ 	GPIO_EXTAMP_LOW,
++/*	GPIO_I2S_MODE0,
++	GPIO_I2S_MODE1,
+ 	GPIO_EXTAMP2_HIGH,
+ 	GPIO_EXTAMP2_LOW,
+ 	GPIO_RCVSPK_HIGH,
+@@ -123,11 +124,11 @@ static struct audio_gpio_attr aud_gpios[GPIO_NUM] = {
+ 	[GPIO_SMARTPA_MODE3] = {"aud_smartpa_mode3", false, NULL},
+ 	[GPIO_TDM_MODE0] = {"aud_tdm_mode0", false, NULL},
+ 	[GPIO_TDM_MODE1] = {"aud_tdm_mode1", false, NULL},
++	[GPIO_EXTAMP_HIGH] = {"audextamp_high", false, NULL},
++	[GPIO_EXTAMP_LOW] = {"audextamp_low", false, NULL},
+ 
+ /*	[GPIO_I2S_MODE0] = {"audi2s1_mode0", false, NULL},
+ 	[GPIO_I2S_MODE1] = {"audi2s1_mode1", false, NULL},
+-	[GPIO_EXTAMP_HIGH] = {"audextamp_high", false, NULL},
+-	[GPIO_EXTAMP_LOW] = {"audextamp_low", false, NULL},
+ 	[GPIO_EXTAMP2_HIGH] = {"audextamp2_high", false, NULL},
+ 	[GPIO_EXTAMP2_LOW] = {"audextamp2_low", false, NULL},
+ 	[GPIO_RCVSPK_HIGH] = {"audcvspk_high", false, NULL},
+@@ -481,6 +482,22 @@ int AudDrv_GPIO_EXTAMP_Select(int bEnable, int mode)
+ 				udelay(2);
+ 			}
+ 		}
++		/* VOYO i8: also drive the real speaker amplifier enable */
++		if (aud_gpios[GPIO_EXTAMP_HIGH].gpio_prepare &&
++		    aud_gpios[GPIO_EXTAMP_LOW].gpio_prepare) {
++			for (i = 0; i < extamp_mode; i++) {
++				retval = pinctrl_select_state(pinctrlaud,
++						aud_gpios[GPIO_EXTAMP_LOW].gpioctrl);
++				if (retval)
++					pr_err("could not set audextamp_low pins\n");
++				udelay(2);
++				retval = pinctrl_select_state(pinctrlaud,
++						aud_gpios[GPIO_EXTAMP_HIGH].gpioctrl);
++				if (retval)
++					pr_err("could not set audextamp_high pins\n");
++				udelay(2);
++			}
++		}
+ 	} else {
+ 		if (aud_gpios[GPIO_HPDEPOP_LOW].gpio_prepare) {
+ 			retval =
+@@ -488,6 +505,12 @@ int AudDrv_GPIO_EXTAMP_Select(int bEnable, int mode)
+ 			if (retval)
+ 				pr_err("could not set aud_gpios[GPIO_EXTAMP_LOW] pins\n");
+ 		}
++		if (aud_gpios[GPIO_EXTAMP_LOW].gpio_prepare) {
++			retval = pinctrl_select_state(pinctrlaud,
++					aud_gpios[GPIO_EXTAMP_LOW].gpioctrl);
++			if (retval)
++				pr_err("could not set audextamp_low pins\n");
++		}
+ 
+ 	}
+ #endif
+-- 
+2.25.1
+
