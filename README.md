@@ -25,13 +25,15 @@ Tested on one tablet.
 | Encryption | File-based (FBE v1); keys are protected only in software, since the tablet has no TEE |
 | Signing | Private release keys (`dev-keys`), so the Trust app reports the build as signed |
 | Security patch | Shows 2026-02-01. LineageOS 20 gets community ASB backports, up to about October 2026, without bumping that date |
-| Audio output | Sound card registers and the audio HAL writes to it; speaker and headphone output not yet checked by ear |
+| Audio output | Built-in speaker and 3.5 mm headphones work, and Android follows plugging and unplugging. Headsets with a microphone and their buttons are untested |
 | Camera | Rear (GC5005) and front (GC2235) photos and preview work. Rear LED works as torch and photo flash; flash auto is unconfirmed in the dark. Front video tops out near 15 fps, the sensor's limit. Rear video shows faint thin lines, cause unknown |
 | Video recording | 1080p H.264 through the hardware OMX encoder |
 | Hardware video decoding | Not used: the Android 8 OMX store lists no codecs, so only its encoders are added by hand and playback stays on the software Codec2 decoders |
-| GPS | Real outdoor fix confirmed on GPS, GLONASS and BeiDou (first fix in 8 s with LTE data, 11 satellites used, about 2 m accuracy). Not yet tested without mobile data |
-| SIM and cellular | The SIM is detected and Android asks for its PIN. Network registration, calls, SMS and mobile data not yet tested |
-| Sensors, USB OTG | Untested |
+| GPS | Real outdoor fix on GPS, GLONASS and BeiDou, with and without mobile data (first fix in about 8 s, about 2 m accuracy). The fix for the date reading 1024 weeks early without network time is in the images, but not yet confirmed outdoors |
+| SIM and cellular | The SIM is detected and the tablet registers on LTE. Calls, SMS and mobile data not yet tested |
+| microSD | Working (tested with a FAT card) |
+| Sensors | Accelerometer works. No compass is listed, although the build declares one |
+| USB OTG | Untested |
 | Display refresh | 48.3 Hz, the panel's stock rate |
 
 Known bring-up leftover: a diagnostic logger runs until boot completes. The `voyo_failsafe` RTC mark is
@@ -58,7 +60,7 @@ microSD card in `/external_sd/LineageOS/` (run these in `adb shell` or TWRP's Te
 ```sh
 cd /external_sd/LineageOS
 sha256sum -c SHA256SUMS
-N=lineage-20.0-20261104-UNOFFICIAL-x970_t10_97inc
+N=lineage-20.0-20261112-UNOFFICIAL-x970_t10_97inc
 dd if=$N-boot.img of=/dev/block/mmcblk0p23 bs=1048576
 simg2img $N-vendor.img /tmp/vendor.raw && dd if=/tmp/vendor.raw of=/dev/block/mmcblk0p29 bs=1048576; rm /tmp/vendor.raw
 simg2img $N-system.img /tmp/system.raw && dd if=/tmp/system.raw of=/dev/block/mmcblk0p30 bs=1048576; rm /tmp/system.raw
